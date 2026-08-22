@@ -56,32 +56,45 @@ results.
 
 ---
 
-## 2. Two points that need your confirmation (not blocking yet)
+## 2. Resolved decisions
 
-Recorded here rather than decided silently, per `CLAUDE.md` line 8.
+Both resolved on 2026-08-22. These are implementation clarifications of the approved design,
+not architectural changes.
 
-**Q1 — the Guard runs in two positions, not one.**
-`ARCHITECTURE.md` §A6 describes the guard as running *after* every step, on the result.
-Amendment A1 confirms that. But `CLAUDE.md`'s own chain reads
-`Compiled Plan -> Guard -> Policy Gate -> Tool`, i.e. guard *before* the call — and it has to,
-because an invariant like `adjustment <= order_amount` must be checked **before** money moves,
-not after. Checking it afterwards is useless.
+### Q1 — **APPROVED — one Guard component with two checkpoints**
 
-*Proposal:* one Guard component, two entry points, same signal machinery and same score:
+One Guard component, two explicit entry points, sharing the same deterministic signal and
+scoring machinery where appropriate.
 
-| Entry point | Runs | Checks |
+| Entry point | Runs | Evaluates |
 |---|---|---|
-| `check_proposed_action()` | after argument resolution, **before** the Policy Gate | invariant registry over resolved arguments |
-| `check_result()` | on the **quarantined** result, before commit | structural · numeric · categorical · behavioural |
+| `check_proposed_action()` | after argument resolution, **before** the Policy Gate and the tool call | deterministic invariants over the resolved arguments, e.g. `adjustment <= order_amount` |
+| `check_result()` | after the tool returns, on the **quarantined** result, **before** it becomes trusted state | structural · numeric · categorical · behavioural |
 
-Both are drawn in `docs/architecture.mmd`. Not needed until Phase 12 — flag it now, decide later.
+```text
+resolved arguments -> check_proposed_action() -> Policy Gate -> Tool
+Tool -> pending / quarantined result -> check_result() -> PASS -> commit trusted state
+                                                       -> FAIL -> handover / escalation
+```
 
-**Q2 — offline pipeline ordering.**
-Your kick-off message lists `Compilability Probe -> Sequence Grouping`. The probe *measures the
-output of* grouping (it needs a modal sequence before it can compute support), so
-`docs/architecture.mmd` and `ARCHITECTURE.md` §C both order it
-`Outcome Checker -> Exact Sequence Grouping -> Compilability Probe`. Say if you want it drawn
-the other way; I believe the listed order was shorthand rather than a design intent.
+`check_proposed_action()` exists because an invariant checked only after the external action is
+too late to prevent anything.
+
+**Security invariant:** a result that failed `check_result()` must never become readable by a
+`FROM_STEP` binding. Enforced by a test in Phase 11, not by convention.
+
+### Q2 — **APPROVED — sequence grouping precedes the compilability decision**
+
+Computational order:
+
+```text
+outcome-verified trajectories -> exact sequence grouping -> modal sequence
+    -> support calculation -> compilability decision
+```
+
+So the pipeline reads `Outcome Checker -> Exact Sequence Grouping -> Compilability Probe`.
+The probe is the GO/NO-GO decision taken on the evidence that grouping produced.
+Clustering is **not** introduced as a replacement for grouping, in v1 or otherwise.
 
 ---
 
@@ -148,7 +161,35 @@ reorder-invariance and add-a-key-changes-it laws.
 **Measurable result:** property suite green over generated nested structures; a deliberately
 reordered payload produces a byte-identical canonical form.
 
-### Phase 2 — Ledger + hash-chain verification · `TODO`
+### Phase 2 — Ledger + hash-chain verification · `DONE` (2026-08-22)
+
+**Measured result — achieved.** `verify()` names the exact position of the first tampered entry:
+
+```text
+intact ledger          valid=True   first_broken_seq=None  reason=None
+payload tampered @5    valid=False  first_broken_seq=5     reason=payload does not match payload_hash
+resealed forge @3      valid=False  first_broken_seq=4     reason=prev_hash does not match the previous entry hash
+entry deleted @2       valid=False  first_broken_seq=2     reason=sequence number is 3, expected 2
+entries reordered      valid=False  first_broken_seq=1     reason=sequence number is 6, expected 1
+```
+
+105 tests passed (49 new) · ruff clean · `mypy --strict` clean over 27 files · import-linter 4/4.
+
+**Decisions.** (a) `LedgerEvent` (caller-supplied) is separate from `LedgerEntry` (ledger-sealed),
+so a caller can never supply `seq`, `prev_hash` or `entry_hash` — the same principle as the
+recorder computing its own fingerprints. (b) `entry_hash` covers the payload via `payload_hash`
+rather than inlining it, so a payload can be redacted later without breaking the chain.
+(c) Chain mathematics are free functions over any sequence of entries, so persistence can be
+swapped in later without touching the part that must be correct. (d) Three event types were added
+that §B omitted but the §0.5 lifecycle requires: `PLAN_VALIDATED`, `PLAN_SHADOWED`,
+`PLAN_DEACTIVATED`; extending an enum is backward-compatible.
+
+**Known limitation, documented not hidden.** A hash chain cannot detect deletion from the *tail* —
+truncating the last N entries leaves a self-consistent chain. Proven by
+`test_removing_the_last_entry_is_not_detectable_by_the_chain_alone`. The production answer is an
+externally recorded head hash (periodic anchor / WORM storage, `ARCHITECTURE.md` §H). Not solved
+in the prototype.
+
 
 - `rote/safety/ledger.py` — append-only, `prev_hash` chaining over canonical bytes, `verify()`
   walking the chain.

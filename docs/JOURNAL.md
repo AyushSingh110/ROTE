@@ -303,3 +303,163 @@ Baseline before today was: no code, no tests, `no tests ran`.
 
 Everything else. No ledger, no generator, no checker, no agent, no gate, no compiler.
 Phase 2 is the ledger and its hash chain, and it comes next.
+
+---
+
+## 2026-08-22 — Session 3: Phase 2, the audit ledger
+
+### What we built and why
+
+The **audit ledger**: a list of records that can only grow, and that shows if anybody edited it.
+
+Why Rote needs this. The whole promise of the project is that for any past exception you can
+answer *"why was this adjustment posted?"* If the record of what happened can be quietly edited
+afterwards, that promise is worthless. So the ledger has to be **tamper-evident** — not
+impossible to change, but impossible to change *without it showing*.
+
+**How the chain works, in plain words.** Each record contains a short fingerprint of the record
+before it. Record 3 carries a fingerprint of record 2. Record 4 carries a fingerprint of record
+3. So the records are joined like links in a chain.
+
+Now suppose somebody edits record 2. Its fingerprint changes. But record 3 still carries the
+*old* fingerprint. The two no longer agree, and the checker sees it. To hide the edit, the
+attacker must also fix record 3, which breaks record 4, and so on all the way to the end. They
+have to rewrite the entire rest of the chain. And if anybody wrote down the last fingerprint
+somewhere else, even that fails.
+
+This is **not** a blockchain. There is no network, no mining, no consensus. It is one SHA-256
+fingerprint per record. About a hundred lines in total.
+
+### Tests written BEFORE the code
+
+I wrote 49 tests first, covering the thirteen behaviours agreed in advance:
+
+- appending many records gives a valid chain
+- every record has the right sequence number and hash links
+- each record's `prev_hash` really points at the record before it
+- the fingerprint is computed from the canonical bytes built in Phase 1
+- editing record *k* is reported at exactly *k*
+- editing an earlier record and re-sealing it breaks the *next* link instead
+- reordering records is detected
+- deleting a record is detected
+- there is no update or delete operation on the ledger at all
+- malformed or unknown fields are rejected the moment a record is created
+- an empty ledger behaves sensibly
+- a one-record ledger behaves sensibly
+- identical input always produces identical fingerprints
+
+Running them before writing the code gave exactly the expected failure:
+`ModuleNotFoundError: No module named 'rote.contracts.ledger'` — two collection errors, both
+naming the module I was about to write. That is the correct "red" state.
+
+### The measured result
+
+This is the number Phase 2 had to produce. Real output, not a claim:
+
+```text
+intact ledger          valid=True   first_broken_seq=None  reason=None
+payload tampered @5    valid=False  first_broken_seq=5     reason=payload does not match payload_hash
+resealed forge @3      valid=False  first_broken_seq=4     reason=prev_hash does not match the previous entry hash
+entry deleted @2       valid=False  first_broken_seq=2     reason=sequence number is 3, expected 2
+entries reordered      valid=False  first_broken_seq=1     reason=sequence number is 6, expected 1
+```
+
+Look at the third line, because it is the most interesting one. There I played the part of a
+careful attacker: I changed record 3's contents **and** recomputed its own fingerprint correctly,
+so record 3 itself looks perfectly fine. The checker still catches it — at record **4**, because
+record 4 is still pointing at record 3's *old* fingerprint. That is the chain doing its actual
+job, and it is the example to use if anybody asks how this works.
+
+### The error we hit today
+
+**What broke.** One test failed:
+`ValueError: zip() argument 2 is shorter than argument 1`.
+
+**What the real cause was.** The code was fine. **My test was wrong.** I had written
+`zip(entries, entries[1:], strict=True)` to walk through consecutive pairs of records. But a list
+of 5 items and that same list without its first item has 4 items. They can never be the same
+length. `strict=True` means "refuse if the lengths differ", so Python correctly refused.
+
+**How we fixed it.** Replaced it with `itertools.pairwise(entries)`, which is the standard Python
+tool for exactly this job — walking through neighbouring pairs. Shorter and impossible to get
+wrong. `ruff` had independently suggested the same thing.
+
+**What I should have noticed sooner.** Two things.
+
+First, and more important: **when a test fails, the test might be the thing that is wrong.** My
+instinct was to go and look at the ledger code. The ledger code was correct. I lost a few minutes
+looking in the wrong place. Always read the failure message properly first — it said the two
+lists were different lengths, which is a statement about my test, not about hashing.
+
+Second: if the standard library already has a function for what I am doing, use it. `pairwise`
+existed the whole time.
+
+There is a small silver lining. `strict=True` is what caught my mistake. A plain `zip` would have
+silently ignored the extra item and the test would have *passed* while checking one pair fewer
+than I thought. So the strict version turned a silent wrong test into a loud one. That is exactly
+the behaviour I want everywhere in this project.
+
+### The second error, which is the same error as last session
+
+Writing this journal entry through the shell failed again with
+`unexpected EOF while looking for matching quote` — the identical failure from session 1.
+
+*Root cause:* I again tried to push a large document containing quotes, backticks and code fences
+through a shell here-document on Git Bash.
+
+*What I should have noticed sooner:* I wrote the lesson down in the session 1 entry —
+"use the tool that matches the job" — and then did not follow my own note. Writing a document is
+a file-writing job, not a shell job. Fixed by writing the entry to a file directly and appending
+it. **A lesson recorded but not applied is not yet learned.**
+
+### Design decisions taken today
+
+**1. Two separate models: `LedgerEvent` and `LedgerEntry`.**
+The caller creates a `LedgerEvent` — what happened, who did it, when. The caller does **not** get
+to supply the sequence number or any of the hashes. The ledger computes those itself and returns
+a sealed `LedgerEntry`. This means a caller cannot forge its position in the chain even by
+accident. It is the same principle as Phase 1's rule that the recorder computes fingerprints
+itself and never accepts one from outside.
+
+**2. The record's fingerprint covers the payload indirectly.**
+Each record stores `payload_hash` (a fingerprint of the payload), and the record's own
+fingerprint covers `payload_hash` rather than the raw payload. The tamper protection is identical
+— changing the payload changes `payload_hash`, which changes the record fingerprint. But it means
+a payload can later be **redacted** (for a legal deletion request, say) while the chain still
+verifies. That is a real requirement in finance, and building it in now costs nothing.
+
+**3. An honest limitation, which I am writing down rather than hiding.**
+A hash chain **cannot** detect that records were deleted from the *end*. If the last three
+records are removed, the remaining chain is still perfectly consistent. There is a test that
+proves this and names it:
+`test_removing_the_last_entry_is_not_detectable_by_the_chain_alone`.
+
+The fix is to record the final fingerprint somewhere outside the ledger — printed in a daily
+report, stored in another system, or written to storage that cannot be overwritten. That is noted
+in the architecture as the production answer. For this prototype the limitation is documented,
+not solved. **A test that documents a weakness is worth more than one that hides it.**
+
+**4. Storage is a plain in-memory list for now.**
+The chain mathematics (`entry_hash_of`, `verify_chain`) are plain functions that work on any
+sequence of records. They do not know or care where records are stored. So the database can be
+added later without touching the part that must be correct.
+
+**5. I added three event types the approved list did not name:**
+`PLAN_VALIDATED`, `PLAN_SHADOWED`, `PLAN_DEACTIVATED`. The plan lifecycle diagram in the
+architecture (§0.5) requires those transitions, so the list was incomplete rather than
+deliberately short. Adding options to a list like this is safe — old records stay valid.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 105 passed (56 from Phase 1, 49 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 27 source files |
+| import-linter | 4 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+No database yet. No command-line `verify` tool yet. Nothing from Phase 3 onwards — no generator,
+no checker, no agent, no gate, no compiler. Phase 3 is the synthetic exception generator, and I
+will not start it without being asked.
