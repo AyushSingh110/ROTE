@@ -21,7 +21,7 @@ from rote.domain.generators.reconciliation import generate_dataset
 from rote.domain.tools.adapters import ReconciliationTools
 from rote.safety.gate import PolicyGate
 from rote.safety.ledger import Ledger
-from rote.safety.policy_defaults import default_policy_config
+from rote.safety.policy_defaults import OBSERVATIONAL_TOOLS, default_policy_config
 
 SEED = 29
 COUNT = 30
@@ -452,3 +452,57 @@ class TestLedgerRecording:
             rendered = str(entry.payload).lower()
             for marker in ("api_key", "password", "secret", "authorization", "bearer "):
                 assert marker not in rendered
+
+
+class TestObservationalToolsGrantNoAuthority:
+    def test_read_only_decoys_are_offered_to_the_agent(self) -> None:
+        data, gate, _ledger, _tools = build()
+        offered = {spec.name for spec in gate.for_task(context(data)).available_tools()}
+        assert offered >= OBSERVATIONAL_TOOLS
+
+    def test_no_observational_tool_is_mutating(self) -> None:
+        assert OBSERVATIONAL_TOOLS.isdisjoint(WRITE_TOOLS)
+
+    def test_an_observational_call_writes_no_intent(self) -> None:
+        data, gate, ledger, _tools = build()
+        gate.for_task(context(data)).invoke(
+            "get_merchant_profile", {"merchant_id": data.exceptions[0].facts.merchant_id}
+        )
+        assert LedgerEventType.INTENT not in {e.event_type for e in ledger.entries}
+
+    def test_an_observational_call_is_still_recorded_as_a_gate_decision(self) -> None:
+        data, gate, ledger, _tools = build()
+        gate.for_task(context(data)).invoke(
+            "get_merchant_profile", {"merchant_id": data.exceptions[0].facts.merchant_id}
+        )
+        verdicts = [e for e in ledger.entries if e.event_type is LedgerEventType.GATE_VERDICT]
+        assert len(verdicts) == 1
+        assert verdicts[0].payload["verdict"] == "permit"
+
+    def test_money_caps_are_untouched_by_the_change(self) -> None:
+        config = default_policy_config()
+        rule = config.rule_for(ExecutionPath.LIVE_AGENT, None)
+        assert rule is not None
+        assert rule.max_per_action == {Currency.INR: 50_000, Currency.USD: 1_000}
+
+    def test_a_fee_plan_still_cannot_void_a_bank_line(self) -> None:
+        config = default_policy_config()
+        fee = config.rule_for(ExecutionPath.LIVE_AGENT, ExceptionCategory.FEE_MISMATCH)
+        assert fee is not None
+        assert "void_duplicate_bank_line" not in fee.allowed_tools
+
+    def test_observational_tools_are_available_in_every_category(self) -> None:
+        config = default_policy_config()
+        for path in ExecutionPath:
+            for category in (None, *ExceptionCategory):
+                rule = config.rule_for(path, category)
+                assert rule is not None
+                assert rule.allowed_tools >= OBSERVATIONAL_TOOLS
+
+    def test_both_paths_still_offer_the_same_tools(self) -> None:
+        config = default_policy_config()
+        live = config.rule_for(ExecutionPath.LIVE_AGENT, None)
+        compiled = config.rule_for(ExecutionPath.COMPILED_PLAN, None)
+        assert live is not None
+        assert compiled is not None
+        assert live.allowed_tools == compiled.allowed_tools

@@ -4,6 +4,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from rote.contracts.checker import CheckerVerdict
 from rote.contracts.common import Domain, ExceptionCategory
+from rote.contracts.fingerprint import structural_fingerprint
 from rote.contracts.trajectory import (
     GateVerdict,
     Outcome,
@@ -88,3 +89,48 @@ def categories_all(
     category: ExceptionCategory = ExceptionCategory.FEE_MISMATCH,
 ) -> dict[UUID, ExceptionCategory]:
     return {trajectory.trajectory_id: category for trajectory in trajectories}
+
+
+def build_with_steps(
+    name: str,
+    steps: Sequence[tuple[str, dict[str, object], dict[str, object]]],
+    *,
+    task_input: dict[str, object],
+    model: str = "some-real-model",
+) -> Trajectory:
+    recorded = tuple(
+        TrajectoryStep(
+            index=index,
+            tool=tool,
+            args=dict(args),
+            result=dict(result),
+            result_fingerprint=structural_fingerprint(dict(result)),
+            gate_verdict=GateVerdict.PERMIT,
+            idempotency_key=None,
+            error=None,
+            attempts=1,
+            latency_ms=1,
+        )
+        for index, (tool, args, result) in enumerate(steps)
+    )
+    return Trajectory(
+        trajectory_id=uuid5(NAMESPACE, name),
+        correlation_id=name,
+        domain=Domain.RECONCILIATION,
+        executor_kind="live_agent",
+        task_input_redacted=dict(task_input),
+        untrusted_text_paths=("$.merchant_note",),
+        category=None,
+        category_confidence=None,
+        steps=recorded,
+        outcome="resolved",
+        checker_verdict=CheckerVerdict.PASS,
+        checker_version="reconciliation-1",
+        agent_model_id=model,
+        prompt_template_id="test-v1",
+        dry_run=True,
+        started_at=MOMENT,
+        finished_at=MOMENT,
+        tokens_in=0,
+        tokens_out=0,
+    )

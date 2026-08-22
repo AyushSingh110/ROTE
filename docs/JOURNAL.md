@@ -1617,3 +1617,182 @@ but nothing has touched it yet, which is the point.
 
 **And the honest headline: no research result has been produced.** Every number above carries
 `research grade: False`. The probe is ready; what it needs now is trajectories from a real model.
+
+---
+
+## 2026-08-22 — Session 10: resolving the tool conflict, then Phase 9
+
+### Part one — the conflict between two approved phases
+
+Phase 8 exposed a clash. **Phase 3** deliberately gave the agent more tools than it needs,
+including three plausible-but-useless ones, because if the agent can only reach the right tools
+then "the agent chose these tools" is an empty statement — there was nothing else to choose.
+**Phase 7's gate** then refused those three, because they are not needed.
+
+The consequence was quiet and serious: with the gate on, the agent *could not make a wrong tool
+choice*, so a perfect consistency score was guaranteed by the setup rather than measured.
+
+**What I checked before changing anything.** I went through all eleven security invariants one at
+a time. The important one is invariant 1: the gate is the tool boundary. Exposing a read does not
+weaken it — every read still passes through the gate and still gets written into the audit log.
+And the architecture's allowlist rule is about *actions*: "a fee-mismatch plan may post an
+adjustment, it may not issue a refund". A read is not an action. It grants no authority.
+
+**One caveat that changed the shape of the rule.** Threat T6 is data leaving in a prompt, and that
+does grow with how much the agent can read. So the rule is *not* "reads are safe". It is:
+**read-only tools returning typed, non-sensitive fields may be exposed.** I put that in the code
+as a separately named group, `OBSERVATIONAL_TOOLS`, with the reason written above it — rather than
+quietly widening the existing read list, where the reasoning would have vanished.
+
+**Result:** with the decoys reachable again, the same agent with random detours turned on now
+produces genuinely varied tool sequences, and the probe correctly refuses all six categories
+(support 0.16–0.28). The perfect score at zero detours is now a *measurement* rather than a
+guarantee.
+
+### Part two — Phase 9: turning recordings into a plan
+
+This is the step where a pile of recordings becomes an actual program.
+
+**Alignment** turned out to be simple, and for a good reason. The probe already found the most
+common tool sequence. If we only learn from the runs that used *exactly* that sequence, then step 3
+is the same tool in every run, so lining them up needs no cleverness at all. Restricting to the
+modal group is what buys that simplicity, and it is worth saying out loud: the hard part was
+already done by the probe.
+
+**Binding** is the interesting part, and it is the sentence to lead with if anyone asks how
+compilation works:
+
+> In run 1 the argument was `record_id="REC-4417"`. In run 2 it was `"REC-5120"`. Looking across
+> ninety-three runs, that argument *always* equals a particular field of the incoming exception —
+> so it compiles to "read this field". Meanwhile `window_days=7` never changed at all, so it
+> compiles to the constant 7.
+>
+> **Telling apart what varies with the task and what is genuinely fixed is what turns a recording
+> into a reusable program.**
+
+Three questions are asked in a fixed order, cheapest first:
+
+1. Was it identical in every run? → a constant.
+2. Did it always equal some field of the incoming task? → read that field.
+3. Did it always equal some field of an earlier result? → read that, from the earliest step that
+   produced it, so the plan takes the shortest possible dependency.
+
+If none of the three holds, **the plan stops there**. It does not guess. It compiles the steps up
+to that point and hands over. A partial plan is a real result.
+
+Two details that matter more than they look:
+
+- **Types must match, not just values.** The number `5` and the text `"5"` are not the same thing.
+  A test feeds the binder an argument whose value looks equal but is a different type, and the
+  plan correctly refuses to bind it.
+- **Ambiguity is recorded, never resolved silently.** If two different fields both always match,
+  the plan picks the shallowest one *and writes down the alternatives*. That is exactly the sort of
+  coincidence that holds for three hundred runs and then breaks.
+
+### The measured result
+
+Compiled from the 337 fit runs; validated against the 163 holdout runs that nothing had touched
+until this moment.
+
+```text
+category                fit  steps  trunc   holdout  patheq  miss  validated
+duplicate_entry          32      1   True        11      11     0  PASS
+fee_mismatch             93      2   True        31      31     0  PASS
+fx_rounding              46      2   True        29      29     0  PASS
+partial_payment          39      2   True        21      21     0  PASS
+timing_cutoff            68      1   True        41      41     0  PASS
+transposed_reference     59      2   True        30      30     0  PASS
+
+ARGUMENT BINDING MIX: {from_input: 11, literal: 4}
+REPLAY TOTAL        : holdout 163  path-equal 163  playback misses 0
+```
+
+**163 out of 163 unseen runs reproduced exactly, with zero playback misses.** Every compiled step
+asked for precisely the call that was recorded.
+
+But look at the `trunc` column. **Every single category truncated.** So the honest headline is:
+the compiled prefixes are perfect, and no category compiles all the way to the money.
+
+### The finding: exactly what is blocking, and it is two things
+
+Rather than shrug at "everything truncates", I ran the binder argument by argument to see what
+actually failed. The answer is remarkably tidy.
+
+```text
+fee_mismatch  step 2  post_adjustment
+     bound  : currency=literal, reason=literal, record_id=from_input
+     UNBOUND: idempotency_key, minor_units
+
+timing_cutoff step 1  mark_settlement_matched
+     bound  : bank_line_id=from_input, record_id=from_input, status=literal
+     UNBOUND: idempotency_key
+```
+
+Only **two** arguments in the entire system fail to bind.
+
+**1. `idempotency_key`.** It appears in every unbound list. And it should never have been the
+plan's problem in the first place — the architecture already says the key is derived from
+"(exception id, action type, canonicalised arguments)", which is the **gate's** job. It ended up
+as a tool argument the caller supplies, so the compiler is being asked to learn something that
+should be computed. Here is what happens if that one thing moves to where the architecture already
+puts it:
+
+```text
+duplicate_entry        3/3 steps   FULLY COMPILES
+timing_cutoff          2/2 steps   FULLY COMPILES
+transposed_reference   3/3 steps   FULLY COMPILES
+fee_mismatch           2/4 steps   still blocked by ['minor_units']
+fx_rounding            2/4 steps   still blocked by ['minor_units']
+partial_payment        2/4 steps   still blocked by ['minor_units']
+```
+
+**Half the categories compile end to end from one change.**
+
+**2. `minor_units`.** The remaining blocker, and a genuine one. It is the amount of the correction
+— internal amount minus bank amount. It is not any field, and it is not any constant. It is
+arithmetic. That is precisely the gap that rule induction (the next binding tier) exists to fill,
+and it needs a dependency decision.
+
+Neither change is mine to make: the first touches Phase 3's tool contracts and Phase 7's gate, the
+second needs a new library. Both are written up for approval rather than done.
+
+### The error I made twice, and finally noticed
+
+Editing a file by searching for a chunk of its text failed **silently** — again. In Phase 7 it was
+a function signature; today it was a constant. Both times the automatic formatter had already
+reflowed those lines onto one line, so my multi-line search matched nothing, the edit was skipped,
+and the script cheerfully reported success.
+
+The first time, five confusing type errors led me back to it. Today I recognised the shape of it
+in seconds and switched to editing by line position instead.
+
+**What I should have noticed sooner:** a search-and-replace that finds nothing is not a no-op, it
+is a failure that does not announce itself. If I search for text that a formatter may have
+touched, I have to check the replacement actually landed rather than trust the exit code. The
+general lesson: **"the command succeeded" and "the change happened" are different claims.**
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 457 passed (405 before, 52 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 79 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**Rule induction and small-model slots.** The architecture describes five ways to bind an argument;
+I built the three that need no model and no new library. The fourth needs scikit-learn, which is a
+dependency decision, and the fifth is on the agreed cut list. Everything that does not bind causes
+the plan to stop and hand over, which is the approved behaviour.
+
+**Invariants are empty.** The expectation contract has a slot for them, and it holds *names* of
+hand-written checks rather than any kind of expression, exactly as approved. None are written yet;
+they arrive with the Guard.
+
+**No plan is activated.** Every plan comes out as a draft. The lifecycle, sign-off and kill switch
+are Phase 10, and validation passing is not the same as being allowed to run.
+
+**And the standing caveat:** every number here carries `research grade: False`. This shows the
+compiler works. It says nothing yet about reconciliation.

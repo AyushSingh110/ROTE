@@ -21,6 +21,13 @@ READ_TOOLS = frozenset(
 
 WRITE_TOOLS = frozenset({"post_adjustment", "mark_settlement_matched", "void_duplicate_bank_line"})
 
+# read-only, typed, non-sensitive and never needed to resolve a case. Exposed on purpose: if
+# the agent could only reach the tools it needs, a recorded tool choice would not be a choice
+# at all, and the Risk R2 defence in ARCHITECTURE.md would be switched off by the allowlist.
+OBSERVATIONAL_TOOLS = frozenset(
+    {"get_merchant_profile", "get_chargeback_history", "recalculate_settlement_batch"}
+)
+
 BASELINE_PER_ACTION = {Currency.INR: 50_000, Currency.USD: 1_000}
 BASELINE_PER_WINDOW = {Currency.INR: 2_000_000, Currency.USD: 40_000}
 WINDOW_SECONDS = 3_600
@@ -55,7 +62,7 @@ def default_policy_config() -> PolicyConfig:
             PolicyRule(
                 path=path,
                 category=None,
-                allowed_tools=READ_TOOLS | WRITE_TOOLS,
+                allowed_tools=READ_TOOLS | WRITE_TOOLS | OBSERVATIONAL_TOOLS,
                 max_per_action=dict(BASELINE_PER_ACTION),
                 max_per_window=dict(BASELINE_PER_WINDOW),
                 window_seconds=WINDOW_SECONDS,
@@ -68,7 +75,7 @@ def default_policy_config() -> PolicyConfig:
                 PolicyRule(
                     path=path,
                     category=category,
-                    allowed_tools=CATEGORY_TOOLS[category],
+                    allowed_tools=CATEGORY_TOOLS[category] | OBSERVATIONAL_TOOLS,
                     max_per_action=dict(CATEGORY_PER_ACTION[category]),
                     max_per_window=dict(BASELINE_PER_WINDOW),
                     window_seconds=WINDOW_SECONDS,

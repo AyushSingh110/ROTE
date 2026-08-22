@@ -529,7 +529,71 @@ support below threshold produces a `NonCompilableReport` rather than a plan.
 common-prefix support, alternative sequences, compilable yes/no. **If there is no stable
 skeleton, that is the reported result. The compiler is not forced to emit a plan.**
 
-### Phase 9 — Compiler: align, bind, induce, expectations, replay validation · `TODO`
+### Phase 9 — Align, bind, expectations, replay validation · `DONE` (2026-08-22)
+
+**Approved amendment A4 — observational tools.** Verified against all eleven security invariants
+before changing anything. Exposing a read does not weaken invariant 1 (every read still passes the
+gate and is still audited), and §E1's allowlist bounds **actions**, not reads. One caveat changed
+the rule's shape: threat T6 grows with read breadth, so the rule is *read-only tools returning
+typed, non-sensitive fields*, encoded as a separately named `OBSERVATIONAL_TOOLS` group with the
+reasoning above it rather than a quiet widening of `READ_TOOLS`. **Effect:** with decoys reachable
+again, the same agent with detours on produces genuinely varied sequences and the probe correctly
+refuses all six categories (0.16–0.28). The perfect score at zero detours is now measured, not
+guaranteed.
+
+**Measured result.** Compiled from 337 fit runs, validated on the 163 holdout runs untouched until
+that moment.
+
+```text
+category                fit  steps  trunc   holdout  patheq  miss  validated
+duplicate_entry          32      1   True        11      11     0  PASS
+fee_mismatch             93      2   True        31      31     0  PASS
+fx_rounding              46      2   True        29      29     0  PASS
+partial_payment          39      2   True        21      21     0  PASS
+timing_cutoff            68      1   True        41      41     0  PASS
+transposed_reference     59      2   True        30      30     0  PASS
+
+binding mix: {from_input: 11, literal: 4}
+replay total: holdout 163  path-equal 163  playback misses 0
+```
+
+**163/163 unseen runs reproduced exactly, zero playback misses** — but **every category truncated**.
+The compiled prefixes are perfect and nothing compiles all the way to the money.
+
+457 tests passed (52 new) · ruff clean · `mypy --strict` clean over 79 files · import-linter 6/6.
+
+**The finding: exactly two arguments in the whole system fail to bind.**
+
+1. **`idempotency_key`** — in every unbound list, and it should never have been the plan's problem.
+   §E1 already says the key is derived from `(exception_id, action_type, canonicalised_args)`, which
+   is the **gate's** job; it became a tool argument the caller supplies, so the compiler is asked to
+   learn something that should be computed. Moving it back would give:
+   `duplicate_entry 3/3 · timing_cutoff 2/2 · transposed_reference 3/3` — **three of six categories
+   compile end to end from one change.**
+2. **`minor_units`** — the correction amount, internal minus bank. Not a field, not a constant:
+   arithmetic. Exactly the gap tier-1 rule induction exists to fill.
+
+Neither is mine to change — the first touches Phase 3 tool contracts and Phase 7's gate, the second
+needs scikit-learn. **Both raised for approval, neither done.**
+
+**Decisions.** (a) Alignment is by index over the modal group only, so step *i* is the same tool in
+every run and no clever alignment is needed — the probe already did the hard part. (b) Binding asks
+three questions cheapest-first: constant → task field → earlier result, earliest producing step
+winning so the plan takes the shortest dependency. (c) **Types must match, not just values** — `5`
+never binds to `"5"`. (d) **Ambiguity is recorded, never resolved silently**: if two fields both
+always match, the shallowest wins *and the alternatives are stored*. (e) A **playback miss is a
+failure, never a skip** — swallowing it would make every other number meaningless. (f) Expectations
+store raw **and** widened numeric ranges, integer arithmetic throughout, so tolerance stays a
+runtime knob and reports stay canonically comparable.
+
+**Deliberately not done.** `FROM_RULE` (needs scikit-learn — dependency decision) and `FROM_SLOT`
+(cut-list item #2). Invariants exist as a slot holding *names* of hand-written checks, never
+expressions, and none are written yet — they arrive with the Guard. Every plan is emitted as
+`DRAFT`; lifecycle, sign-off and kill switch are Phase 10, and passing validation is not the same as
+being allowed to run.
+
+**Standing caveat:** every number carries `research grade: False`.
+
 
 **Tests first:** each `ArgBinding` hypothesis is inferred correctly from fixtures; hypothesis
 ordering is respected (LITERAL before FROM_INPUT before FROM_STEP); ambiguous input paths are
