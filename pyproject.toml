@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rote"
+version = "0.1.0"
+description = "Deterministic execution for payment-operations agents."
+requires-python = "==3.11.*"
+dependencies = [
+    "pydantic==2.9.2",
+    "structlog==24.4.0",
+    "tenacity==9.0.0",
+    "SQLAlchemy==2.0.35",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.3",
+    "pytest-cov==5.0.0",
+    "hypothesis==6.112.1",
+    "ruff==0.6.9",
+    "mypy==1.11.2",
+    "import-linter==2.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["rote*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.importlinter]
+root_package = "rote"
+
+[[tool.importlinter.contracts]]
+name = "contracts is a leaf and imports nothing from rote"
+type = "forbidden"
+source_modules = ["rote.contracts"]
+forbidden_modules = [
+    "rote.safety",
+    "rote.domain",
+    "rote.recorder",
+    "rote.compiler",
+    "rote.runtime",
+    "rote.agent",
+    "rote.eval",
+    "rote.service",
+]
+
+[[tool.importlinter.contracts]]
+name = "safety imports only contracts"
+type = "forbidden"
+source_modules = ["rote.safety"]
+forbidden_modules = [
+    "rote.domain",
+    "rote.recorder",
+    "rote.compiler",
+    "rote.runtime",
+    "rote.agent",
+    "rote.eval",
+    "rote.service",
+]
+
+[[tool.importlinter.contracts]]
+name = "runtime and agent cannot reach tool adapters directly"
+type = "forbidden"
+source_modules = ["rote.runtime", "rote.agent"]
+forbidden_modules = ["rote.domain.tools.adapters"]
+
+[[tool.importlinter.contracts]]
+name = "compiler cannot reach into a running system"
+type = "forbidden"
+source_modules = ["rote.compiler"]
+forbidden_modules = ["rote.runtime", "rote.agent", "rote.service"]

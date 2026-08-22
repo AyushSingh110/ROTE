@@ -1,0 +1,125 @@
+%% Rote — approved architecture.
+%% docs/ARCHITECTURE.md is the source of truth; this file must stay in sync with it.
+%% There is no LangGraph in this system. The live agent is a hand-written Python loop.
+
+flowchart TB
+
+    EXC["Exception arrives<br/>settlement line + untrusted merchant free text"]
+
+    subgraph ONLINE["ONLINE — live request path"]
+        direction TB
+
+        BND["Ingestion and Redaction Boundary<br/><i>deterministic</i><br/>splits trusted structured fields from untrusted free text"]
+
+        CLS["Tool-free Classifier<br/><i>PROBABILISTIC — the only judgement call</i><br/>holds no tools · returns a typed category only<br/>never emits an action"]
+
+        RTR{"Deterministic Router<br/><i>deterministic — no model</i><br/>1. category precondition cross-check<br/>2. plan lookup by domain+category+currency"}
+
+        REG[("Plan Registry<br/>ACTIVE and SHADOW plans<br/>versioned · activation is auditable")]
+
+        EXEC["Compiled Plan Executor<br/><i>DETERMINISTIC — zero LLM</i><br/>linear step sequence · flat serialisable state"]
+
+        LIVE["Live Agent<br/><i>FALLBACK — probabilistic</i><br/>hand-written Python tool loop · step-capped<br/>no orchestration framework"]
+
+        GPRE{"Guard — pre-action check<br/><i>deterministic</i><br/>invariant registry over resolved arguments"}
+
+        GATE{"Policy Gate<br/><i>DETERMINISTIC — the tool boundary</i><br/>allowlist · per-action cap · aggregate cap<br/>idempotency key · dry-run<br/>sole holder of tool adapters"}
+
+        REC["INTENT / OUTCOME / UNKNOWN<br/>at-most-once record<br/>INTENT written BEFORE the external call<br/>UNKNOWN is never auto-retried"]
+
+        TOOL["Tool Layer<br/>typed adapters · timeout · bounded retry + backoff<br/>reachable only through the Policy Gate"]
+
+        PEND["Pending Result<br/><i>QUARANTINED — not trusted state yet</i>"]
+
+        GPOST{"Guard — result check<br/><i>deterministic</i><br/>structural · numeric · categorical · behavioural<br/>weighted score vs threshold"}
+
+        COMMIT["Commit Trusted State<br/>only now readable by a FROM_STEP binding"]
+    end
+
+    RESOLVED["Resolved"]
+    HAND["Handover<br/>serialised state + diverging result<br/>passed to the live agent as untrusted data"]
+    ESCL["Escalation"]
+    REJ["Reject"]
+    HUMAN["Human queue"]
+
+    LEDGER[("Audit Ledger<br/><i>append-only · hash-chained · tamper-evident</i><br/>answers: why was this adjustment posted?")]
+
+    subgraph OFFLINE["OFFLINE — learning loop · no live request depends on this"]
+        direction TB
+        TRAJ[("Recorded Trajectories<br/>every step of every run, both paths")]
+        CHK["Outcome Checker<br/><i>code only — no model</i><br/>compares END STATE against ground truth"]
+        GROUP["Exact Sequence Grouping<br/>count identical tool-name sequences"]
+        PROBE{"Compilability Probe<br/><i>DAY-4 GO / NO-GO</i><br/>modal-sequence support per category"}
+        ALIGN["Align<br/>skeleton = steps present in every run, same order"]
+        BIND["Bind<br/>LITERAL · FROM_INPUT · FROM_STEP<br/>FROM_RULE · FROM_SLOT"]
+        INDUCE["Induce decisions<br/>tier 1 rule · tier 2 small model · tier 3 escalate"]
+        EXPECT["Learn Expectations<br/>fingerprints · numeric ranges · categorical domains<br/>raw AND widened ranges both stored"]
+        REPLAY{"Replay Validation<br/>held-out trajectories in playback mode<br/>outcome · action · path equality"}
+        NONCOMP["Report NON-COMPILABLE<br/><i>a valid research result — do not force a plan</i>"]
+        INACT["Plan INACTIVE<br/>report names the failing step"]
+        SHADOW["Plan SHADOW<br/>runs beside the live agent with NO authority"]
+        SIGNOFF["Human Sign-off<br/>named actor recorded in the ledger"]
+        ACTIVE["ACTIVE Plan"]
+    end
+
+    EXC --> BND
+    BND --> CLS
+    CLS --> RTR
+    REG --> RTR
+
+    RTR -->|active plan matched| EXEC
+    RTR -->|no plan or low confidence| LIVE
+    RTR -->|precondition contradicts category| LIVE
+
+    EXEC --> GPRE
+    LIVE --> GPRE
+
+    GPRE -->|invariant veto| HAND
+    GPRE -->|pass| GATE
+
+    GATE -->|REJECT not allowlisted| REJ
+    GATE -->|ESCALATE cap exceeded| ESCL
+    GATE -->|PERMIT| REC
+
+    REC --> TOOL
+    TOOL --> PEND
+    PEND --> GPOST
+
+    GPOST -->|FAIL divergence| HAND
+    GPOST -->|PASS| COMMIT
+
+    COMMIT -->|next step| EXEC
+    COMMIT --> RESOLVED
+
+    HAND --> LIVE
+    HAND --> ESCL
+    ESCL --> HUMAN
+    REJ --> HUMAN
+
+    CLS -.-> LEDGER
+    RTR -.-> LEDGER
+    GATE -.-> LEDGER
+    REC -.-> LEDGER
+    GPOST -.-> LEDGER
+    HAND -.-> LEDGER
+    ESCL -.-> LEDGER
+    REJ -.-> LEDGER
+    RESOLVED -.-> LEDGER
+    SIGNOFF -.-> LEDGER
+
+    RESOLVED -.-> TRAJ
+    ESCL -.-> TRAJ
+    TRAJ --> CHK
+    CHK -->|PASS only — failed and UNKNOWN runs never teach| GROUP
+    GROUP --> PROBE
+    PROBE -->|support below threshold| NONCOMP
+    PROBE -->|support sufficient| ALIGN
+    ALIGN --> BIND
+    BIND --> INDUCE
+    INDUCE --> EXPECT
+    EXPECT --> REPLAY
+    REPLAY -->|fail| INACT
+    REPLAY -->|pass| SHADOW
+    SHADOW --> SIGNOFF
+    SIGNOFF --> ACTIVE
+    ACTIVE --> REG
