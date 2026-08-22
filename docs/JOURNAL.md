@@ -2549,3 +2549,171 @@ the Guard evaluates whatever names a step carries — but the compiler never inv
 which invariant belongs on which category is a hand-written table still to be written.
 
 No classifier, no router, no handover consumer. Phase 13.
+
+---
+
+## 2026-08-23 — Session 16: Phase 13, the judgement call and the thing that checks it
+
+### What was built
+
+Four pieces, and they belong together:
+
+1. **The boundary** — the front door. Splits an incoming exception into *trusted structured
+   fields* and *untrusted free text*, and strips personal data from both.
+2. **The classifier** — the one place a model is allowed to think. It answers a single question:
+   which kind of exception is this?
+3. **The router** — plain code. It decides what to do with that answer, and it is allowed to
+   disagree with it.
+4. **The handover** — what happens when a compiled plan gives up mid-run.
+
+### Why the classifier and the router are separate components
+
+This was settled in the architecture review and today is the day it earns its keep. Three reasons,
+and the third is the one that matters:
+
+1. **They fail differently.** The classifier fails probabilistically; the router fails
+   deterministically and reproducibly. Merged, you could never tell which had happened.
+2. **They have different trust levels.** The classifier eats hostile text. The router reads only
+   typed structured fields — there is a test asserting the word "untrusted" does not appear in the
+   router's source at all.
+3. **The seam between them is the defence.** The router's job includes checking whether the
+   structured data actually *supports* the label the classifier chose. **A component cannot
+   cross-check itself.** Merging them would delete the check.
+
+### The measured result
+
+```text
+INGESTION BOUNDARY
+  note in : "reach me at ops@merchant.example or card 4111111111111111"
+  note out: "reach me at [redacted:email] or card [redacted:card]"
+  redactions found: ('card', 'email')
+
+HANDOVER ON EVERY DIVERGENCE CLASS          quarantined   leaked into task input
+  schema_drift_missing                          True             False
+  schema_drift_added                            True             False
+  type_change                                   True             False
+  extreme_value                                 True             False
+  unseen_enum                                   True             False
+  injected_text_in_a_result                     True             False
+```
+
+Six out of six divergence classes hand over successfully, and in every case the diverging tool
+result crosses to the live agent **as untrusted text**, never as trusted input. That is the
+measurable this phase owed.
+
+### The number that looks bad and is actually the point
+
+```text
+honest classifier
+  classification correct : 101 of 163  (62.0%)
+```
+
+Sixty-two percent looks like a poor classifier. It is not a classifier at all — it is a test double
+that reads **only the structured fields and deliberately ignores the merchant's note.**
+
+And look at exactly where it fails. Its mistakes are not random:
+
+- it calls every *transposed reference* a *timing cut-off* — because in both the amounts match and
+  the bank posted later, which is all the structured data says
+- it calls every *duplicate entry* a *timing cut-off*, for the same reason
+- it calls every *partial payment* a *fee mismatch* — because from the numbers alone they are
+  identical: money is missing, same currency
+
+Those three confusions account for almost exactly the 62 it got wrong.
+
+**This is the project's thesis showing up as a measurement.** The claim was that within one
+exception the *classification* genuinely needs judgement while the repair afterwards does not.
+Here is the evidence: the structured fields alone cannot tell a partial payment from a fee, because
+the thing that distinguishes them is the merchant writing *"customer paid half now, balance next
+week"* in a free-text note.
+
+The numbers say what to do; the note says what happened. That is why a model sits in exactly one
+place in this system, and why it sits in *that* place.
+
+### An honest limit on the injection defence
+
+The security model says a merchant note cannot be trusted, and the router's precondition check is
+the defence. I tested it with a deliberately corruptible classifier that obeys any note mentioning
+"duplicate":
+
+```text
+steerable classifier
+  routes  : {'compiled_plan': 158, 'live_agent': 5}
+  reasons : {'plan_matched': 158, 'precondition_contradiction': 5}
+```
+
+Five steering attempts, five caught, all sent to the live agent. The defence works.
+
+**But look at the honest classifier's row: 62 misclassifications, and every single one still routed
+to the compiled path.** None was caught.
+
+The reason is important and I want it written down plainly:
+
+> **The precondition check catches contradictions. It does not catch confusions.**
+
+If a note pushes the classifier toward a category the structured data *contradicts*, the router
+notices and refuses. If it pushes toward a category the data merely *permits* — fee instead of
+partial payment, say — the router has nothing to object to, and it proceeds.
+
+That is not a bug in the check; it is the limit of what a check on structured data can possibly do.
+The remaining defence for a permitted-but-wrong category is the money cap, and this is exactly why
+the policy caps are sized per category with the most text-dependent categories held lowest. Worth
+saying out loud rather than letting "we have a precondition check" sound like more than it is.
+
+### The model boundary
+
+Three rules, each enforced by a test rather than by care:
+
+- **A classification is a typed category and nothing else.** There is no field on it through which
+  a model could name a tool, an amount, or an action. A test lists the fields and fails if any
+  action-shaped name appears.
+- **An answer outside the allowed set becomes "unknown"** — and "unknown" routes to the live agent.
+  A model that replies `post_adjustment` does not post an adjustment; it produces an unknown, which
+  is recorded, logged, and handed to a human path. The rejected text is kept on the result so the
+  failure is visible rather than swallowed.
+- **Free text never reaches a hosted model.** The classifier refuses outright if it is asked to send
+  untrusted text to a model that is not local. Structured redacted fields may still go.
+
+And the classifier holds no tools at all — not "is discouraged from using tools". It has none, and
+a test asserts it.
+
+### Where I nearly reported something false
+
+My first handover measurement printed `leaked into task input: True` for one divergence class. I
+almost wrote that up as a real leak.
+
+It was my own check that was wrong. I had used the word `"record"` as the marker for the diverging
+value, and the task input legitimately contains `record_id`. A substring match found it and called
+it a leak.
+
+Fixed by using distinctive markers that cannot occur naturally, after which all six classes report
+cleanly.
+
+*What I should have noticed sooner:* a leak detector built on substring matching will find the
+marker inside unrelated words. **A measurement that can produce a false alarm on ordinary data is
+not measuring what it claims** — and reporting it would have sent me hunting a bug that did not
+exist.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 667 passed (609 before, 58 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 105 source files |
+| import-linter | 7 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**No real model.** The classifier talks to a protocol, and both the honest and the steerable
+classifiers used above are test doubles. Wiring an actual local model is a separate step, and every
+number here carries `research grade: False` because of it.
+
+**The router serves one plan per category.** That was the approved simplification: one active plan
+per domain and category, so routing is a lookup and a handful of boolean checks with no embeddings
+anywhere. A test asserts the router imports nothing that could do similarity.
+
+**Nothing consumes the handover yet.** It is built, tested, and serialisable — but the loop that
+takes a handoff and resumes the live agent on it is the end-to-end wiring, not this phase.
+
+**Guard thresholds untouched**, as instructed. The calibration finding from Phase 12 stands open.

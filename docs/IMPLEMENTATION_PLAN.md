@@ -788,7 +788,64 @@ per-signal vector is logged on every step, not just the boolean.
 
 **Measurable result:** per-signal firing table on the labelled divergence set.
 
-### Phase 13 — Classifier, Router, handover/fallback · `TODO`
+### Phase 13 — Classifier, Router, boundary, handover · `DONE` (2026-08-23)
+
+Also picks up the **ingestion/redaction boundary** deferred from Phase 7 — it protects the
+classifier, which now exists.
+
+**Measured result.**
+
+```text
+INGESTION BOUNDARY
+  note in : "reach me at ops@merchant.example or card 4111111111111111"
+  note out: "reach me at [redacted:email] or card [redacted:card]"   redactions: (card, email)
+
+HANDOVER ON EVERY DIVERGENCE CLASS        quarantined   leaked into task input
+  schema_drift_missing / schema_drift_added / type_change /
+  extreme_value / unseen_enum / injected_text_in_a_result    True (6/6)      False (0/6)
+```
+
+667 tests passed (58 new) · ruff clean · `mypy --strict` clean over 105 files · import-linter 7/7.
+
+**The number that looks bad and is the point.** A test-double classifier reading **only structured
+fields** scores 101/163 (62%). Its errors are not random: every *transposed reference* and every
+*duplicate entry* becomes *timing cut-off* (amounts match, bank posted later — all the numbers say),
+and every *partial payment* becomes *fee mismatch* (identical from the numbers alone). Those three
+confusions account for the 62. **This is the thesis as a measurement:** the structured fields cannot
+tell a partial payment from a fee, because what distinguishes them is the merchant writing
+"customer paid half now" in free text. The numbers say what to do; the note says what happened.
+
+**⚠ Honest limit on the T2 injection defence.** A deliberately corruptible classifier that obeys any
+note mentioning "duplicate" was caught 5/5 by the precondition check (`precondition_contradiction`
+→ live agent). But the honest classifier's **62 misclassifications all routed to the compiled path
+uncaught**. The rule:
+
+> **The precondition check catches contradictions. It does not catch confusions.**
+
+A note steering toward a category the data *contradicts* is refused; one steering toward a category
+the data merely *permits* is not. That is the limit of any check on structured data. The remaining
+defence is the per-category money cap — which is exactly why §F/T2 sizes the most text-dependent
+categories lowest.
+
+**Decisions.** (a) Classifier and router stay separate: they fail differently, they have different
+trust levels, and **a component cannot cross-check itself** — merging them deletes the precondition
+check. A test asserts the word "untrusted" never appears in the router's source. (b) A
+`Classification` carries a typed category and nothing a model could act through; an answer outside
+the allowed set becomes `UNKNOWN` (→ live agent) with the rejected text recorded, never swallowed.
+(c) **Free text never reaches a hosted model** — the classifier refuses outright; structured redacted
+fields may still go. (d) The classifier holds no tools at all, asserted by test. (e) The router takes
+a `PlanSource` protocol so it never imports the offline compiler.
+
+**A measurement I nearly reported as a defect.** My first handover run printed `leaked: True` for one
+class. My own check was wrong — I used `"record"` as the marker and the task input legitimately
+contains `record_id`, so a substring match found it. **A leak detector built on substring matching
+finds its marker inside unrelated words**; fixed with distinctive sentinels, after which all six
+classes report cleanly.
+
+**Deliberately not done.** No real model — both classifiers used are test doubles, so every number
+carries `research grade: False`. Nothing consumes the handoff yet (end-to-end wiring, not this
+phase). **Guard thresholds untouched**, as instructed; the Phase 12 calibration finding stands open.
+
 
 **Tests first:** the classifier returns an enum member or raises — never free text, never an
 action; an injected merchant note cannot change the return **type**; the category precondition

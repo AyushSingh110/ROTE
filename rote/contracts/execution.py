@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from rote.contracts.canonical import canonical_hash
+from rote.contracts.common import UntrustedText
 from rote.contracts.plan import PlanStep
 
 FROZEN = ConfigDict(extra="forbid", frozen=True)
@@ -54,6 +55,15 @@ class Handover(BaseModel):
     state: ExecutionState
     # kept apart and labelled: a diverging tool result is exactly the poisoning vector
     untrusted_result: dict[str, Any] | None
+
+
+class AgentHandoff(BaseModel):
+    model_config = FROZEN
+
+    task_input: dict[str, Any]
+    untrusted: tuple[UntrustedText, ...]
+    resumed_from_step: int = Field(ge=0)
+    reason: str
 
 
 class ResultVerdict(BaseModel):
