@@ -45,3 +45,6 @@ class PolicyError(RoteError):
         super().__init__(reason)
         self.verdict = verdict
         self.reason = reason
+
+
+class CompilerError(RoteError): ...

@@ -1,8 +1,9 @@
 import ast
 import inspect
 import pathlib
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -18,7 +19,7 @@ from rote.contracts.agent import (
 )
 from rote.contracts.errors import AgentProtocolError
 from rote.contracts.reconciliation import GeneratedDataset, ReconciliationException
-from rote.contracts.tools import Toolbox
+from rote.contracts.tools import Toolbox, ToolSpec
 from rote.contracts.trajectory import GateVerdict, Trajectory
 from rote.domain.generators.reconciliation import generate_dataset
 from rote.domain.tools.adapters import ReconciliationTools
@@ -378,3 +379,37 @@ class TestOfflineModelIsSelfContained:
             for e in data.exceptions
         ]
         assert quiet != noisy
+
+
+class TestTheModelOnlyEverAsksForOfferedTools:
+    def test_exploration_never_asks_for_a_tool_the_boundary_withheld(self) -> None:
+        data, tools = build(COUNT)
+        withheld = {"get_merchant_profile", "get_chargeback_history"}
+        narrowed = NarrowedTools(tools, withheld)
+        for exception in data.exceptions:
+            trajectory = run_agent(
+                domain=exception.domain,
+                task_input=exception.facts.model_dump(mode="json"),
+                untrusted=exception.untrusted,
+                toolbox=narrowed,
+                model=OfflineHeuristicModel(seed=3, exploration=0.8),
+                recorder=TrajectoryRecorder(clock=clock_from(fixed_clock())),
+                budget=AgentBudget(max_steps=12, max_tool_errors=3),
+                correlation_id=f"{exception.exception_id}:run-0",
+            )
+            assert trajectory.outcome != "failed"
+            assert withheld.isdisjoint({step.tool for step in trajectory.steps})
+
+
+class NarrowedTools:
+    enforces_policy = True
+
+    def __init__(self, inner: ReconciliationTools, withheld: set[str]) -> None:
+        self._inner = inner
+        self._withheld = withheld
+
+    def available_tools(self) -> tuple[ToolSpec, ...]:
+        return tuple(s for s in self._inner.available_tools() if s.name not in self._withheld)
+
+    def invoke(self, name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return self._inner.invoke(name, payload)

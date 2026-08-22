@@ -76,7 +76,11 @@ class OfflineHeuristicModel:
         if "get_merchant_profile" in offered and "get_merchant_profile" not in done:
             return _call("get_merchant_profile", {"merchant_id": facts["merchant_id"]})
         record = _result_of(request, "get_settlement_record")
-        if record is not None and "get_chargeback_history" not in done:
+        if (
+            "get_chargeback_history" in offered
+            and "get_chargeback_history" not in done
+            and record is not None
+        ):
             return _call("get_chargeback_history", {"order_id": record["record"]["order_id"]})
         return None
 

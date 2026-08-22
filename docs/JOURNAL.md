@@ -1437,3 +1437,183 @@ memory. The ledger holds the durable record, so rebuilding that memory from the 
 is the production answer. Not done.
 
 No compiler, no guard, no classifier, no router.
+
+---
+
+## 2026-08-22 — Session 9: Phase 8, the compilability probe
+
+### What this phase is for
+
+This is the **go/no-go**. Everything after it — the compiler, the executor, the guard — only makes
+sense if the answer here is yes.
+
+The question is simple to state and easy to get wrong:
+
+> When the agent successfully resolves the same *kind* of exception many times, does it actually
+> follow the same steps? Or does it wander?
+
+If it wanders, there is nothing to compile and the whole thesis is wrong. That would be a real
+result and it would need to be reported, not hidden. So the probe was built **before** the
+compiler, deliberately, so that a "no" costs eight days rather than three.
+
+### The rule that keeps the answer honest
+
+**The probe is not allowed to know what the steps should be.**
+
+It never looks up the real tool list. It counts what it finds. Two tests enforce this:
+
+- one reads every file in the compiler package and fails if any of the twelve real tool names
+  appears anywhere in it
+- one checks the compiler imports nothing from the tools package at all
+
+And the probe's own tests use invented tool names — `alpha`, `beta`, `gamma`. If the probe can
+find a skeleton in made-up tools it has never heard of, it is measuring, not remembering.
+
+**It also never produces a plan.** It produces a verdict and a number. Emitting a plan is Phase 9,
+and keeping the decision separate from the construction is what stops a weak result quietly
+becoming a plan anyway.
+
+### How it works, in plain words
+
+1. **Select.** Throw away everything the checker did not verify. Failed runs, escalations,
+   unlabelled runs — all excluded, and the reasons are counted so a category that shrinks from 400
+   runs to 30 shows up as a finding rather than a footnote.
+2. **Split 70/30.** Set aside three runs in ten before looking at anything, so Phase 9 has unseen
+   data to validate against. The split is by a hash of the run's own id — not a random seed — so
+   the same run always lands in the same half, on any machine, forever.
+3. **Group.** Write each run's tool sequence out as a single line and count how many runs share it.
+4. **Measure support.** Support is simply *how many runs used the most common sequence, divided by
+   how many runs there were*.
+5. **Decide.** 60% or more → compilable. Between 30% and 60% → only the shared opening steps are
+   compilable. Below 30% → **not compilable**, and say so.
+
+There is a fourth verdict I added: **insufficient evidence**. If a category has fewer than twenty
+verified runs, the probe refuses to call it compilable at all. Declaring victory on a sample of
+three is how you fool yourself.
+
+### The results
+
+All three runs below say **research grade: False**. That label is not decoration — it means the
+trajectories came from the offline stand-in, so these numbers demonstrate that the *machinery*
+works. They are not findings about reconciliation.
+
+**A — the clean case (gate on, no random detours)**
+
+```text
+category               eligible  support  verdict      modal sequence
+duplicate_entry              32     1.00  compilable   record > void_duplicate > close
+fee_mismatch                 93     1.00  compilable   record > fee_schedule > adjust > close
+fx_rounding                  46     1.00  compilable   record > fx_rate > adjust > close
+partial_payment              39     1.00  compilable   record > fee_schedule > adjust > close
+timing_cutoff                68     1.00  compilable   record > close
+transposed_reference         59     1.00  compilable   record > search_by_amount > close
+```
+
+**B — with the agent free to take irrelevant detours half the time**
+
+```text
+duplicate_entry              32     0.16  non_compilable
+fee_mismatch                 93     0.19  non_compilable
+fx_rounding                  46     0.28  non_compilable
+partial_payment              39     0.18  non_compilable
+timing_cutoff                68     0.24  non_compilable
+transposed_reference         59     0.24  non_compilable
+```
+
+**This is the important table.** It is the probe saying **no**. Six categories, all refused. That
+matters far more than run A: a go/no-go that can only say "go" is not a check, it is a rubber
+stamp. Run B proves the probe will stop the project if the data does not support it.
+
+**C — detours taken almost every time**
+
+```text
+duplicate_entry              32     0.78  compilable
+fee_mismatch                 93     0.88  compilable
+timing_cutoff                68     0.78  compilable
+```
+
+An unexpected result, and worth understanding. Support does **not** fall steadily as noise rises.
+It is worst in the middle. When detours happen half the time, every run differs from every other
+run. When they happen nearly always, the detour becomes part of the routine and the runs agree
+again — on a longer, sillier sequence.
+
+The lesson: **the probe measures consistency, not quality.** A consistently wasteful procedure
+compiles perfectly well. Judging whether the steps are *sensible* is a different question, and it
+is the human sign-off in the plan lifecycle that answers it — not this number.
+
+### The three mistakes I made, in order of how much they matter
+
+**1. I built the measurement so that it could not fail.**
+
+My first run showed support 1.00 across every category at every noise level, including the noisy
+ones. That should have been obviously wrong — turning noise up cannot leave behaviour unchanged.
+
+*The cause:* my measurement script created a fresh model for each exception, each with the same
+seed. So every one of the 500 runs replayed the *identical* stream of random choices. "Random"
+detours happened at exactly the same points in every run, which made them perfectly consistent.
+
+*The fix:* one model for the whole campaign, so its randomness actually advances between cases.
+
+*What I should have noticed sooner:* **a suspiciously perfect number is a bug report.** I nearly
+wrote 1.00 into the journal as a result. The thing that saved it was asking "why did turning the
+noise up change nothing?" rather than being pleased.
+
+**2. The test double asked for a tool it had never been offered.**
+
+Under the gate, the offline model kept requesting `get_chargeback_history` — a tool the gate does
+not hand out. The agent loop correctly refused, the run failed, and 269 of 337 runs became
+ineligible.
+
+*The cause:* the model checked "is this tool offered?" on one branch of its detour logic and
+forgot on the other.
+
+*The fix:* one guard added, plus a test that runs the model at maximum exploration against a
+deliberately narrowed toolbox and asserts it never once names a withheld tool.
+
+*What I should have noticed sooner:* the loop already had the rule; the model simply had a hole in
+it. **Enforcing a rule in one place does not mean every component follows it** — and a component
+that has to be corrected by the enforcement is still a broken component.
+
+**3. mypy found dead code I had written on purpose.**
+
+I wrote a rejection reason for "wrong schema version". mypy said the branch was unreachable — and
+it was right. The schema version field is typed as "always 1", so a trajectory with a different
+one cannot exist. The check belonged at validation, where it already is. Deleted.
+
+### A finding that needs a decision, not a fix
+
+Comparing runs A and B exposed a tension between two earlier phases that I did not anticipate.
+
+- **Phase 3** deliberately gave the agent **more tools than it needs**, including three that are
+  plausible but useless. The reason was important: if the agent only has the right tools, then
+  "the agent chose these tools" means nothing, because there was nothing else to choose. The
+  superset is what makes a recorded choice a real choice.
+- **Phase 7's gate** then removed those three from the allowlist, because they are not needed.
+
+The result: **with the gate on, the agent cannot make a wrong tool choice.** Support of 1.00 in run
+A is therefore guaranteed by construction, not measured. The defence against "you only rediscovered
+your own generator" was quietly switched off by a later phase.
+
+The three tools in question are read-only. They move no money and carry no authority, so refusing
+them buys no safety — while allowing them restores the property the research argument depends on.
+
+I have **not** changed the approved policy. This is written up as a recommendation for the next
+session, because it changes what a compilability number means.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 405 passed (357 before, 48 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 71 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+No plans are emitted — the probe stops at a verdict. No alignment, no argument binding, no
+expectations, no replay validation; that is all Phase 9. The holdout set is created and set aside
+but nothing has touched it yet, which is the point.
+
+**And the honest headline: no research result has been produced.** Every number above carries
+`research grade: False`. The probe is ready; what it needs now is trajectories from a real model.

@@ -469,7 +469,55 @@ between them leaves `UNKNOWN`; `UNKNOWN` is never auto-retried; dry-run is the d
 **Measurable result:** forced-crash test yields `UNKNOWN`, not a double-post. Zero tool calls in
 the whole suite bypass the gate.
 
-### Phase 8 — Compiler: select, group, compilability probe · `TODO`
+### Phase 8 — Compilability probe (Day-4 go/no-go) · `DONE` (2026-08-22)
+
+**Measured result — the probe discriminates.** 500 exceptions, 70/30 hash split, fit = 337.
+All three runs are `research grade: False` (offline test double), so these demonstrate the
+**machinery**, not reconciliation.
+
+```text
+A. gate on, no detours            all six categories  support 1.00   COMPILABLE
+B. ungated, detours 50%           all six categories  support 0.16-0.28  NON_COMPILABLE
+C. ungated, detours 90%           all six categories  support 0.78-0.88  COMPILABLE
+```
+
+**Run B is the important one:** the probe says *no* to all six categories. A go/no-go that can only
+say "go" is a rubber stamp. Run C shows support is **non-monotonic** in noise — worst in the middle,
+because a detour taken almost always becomes part of the routine. The probe measures **consistency,
+not quality**; a consistently wasteful procedure compiles fine, and judging sensibleness is the
+human sign-off's job, not this number's.
+
+405 tests passed (48 new) · ruff clean · `mypy --strict` clean over 71 files · import-linter 6/6.
+
+**Decisions.** (a) The probe **may not know the tool set**: a test scans every compiler file and
+fails if any of the twelve real tool names appears, another forbids importing the tools package, and
+its own tests use invented names (`alpha`, `beta`, `gamma`). (b) It emits a **verdict, never a plan**
+— keeping the decision separate from the construction stops a weak result quietly becoming a plan.
+(c) A fourth verdict, `INSUFFICIENT_EVIDENCE`, fires below 20 eligible runs, so victory cannot be
+declared on a sample of three. (d) The probe **refuses mixed producing models** — a skeleton across
+two models conflates them, and §I.8 compares separate runs instead; every report carries its
+`agent_model_id`. (e) Report ratios are stored as **integer counts and per-mille thresholds**, never
+floats, so a report is canonically comparable — which §I.8's report-vs-report comparison needs.
+
+**Two defects found and fixed.** (1) My measurement script built a fresh model per exception with the
+same seed, replaying an identical random stream and manufacturing a fake support of 1.00 even under
+heavy noise — *a suspiciously perfect number is a bug report*. (2) The offline test double asked for
+`get_chargeback_history` without checking it had been offered; the loop correctly refused and 269 of
+337 runs became ineligible. Fixed with a guard plus a test that runs at maximum exploration against a
+narrowed toolbox and asserts no withheld tool is ever named.
+
+**⚠ A finding needing your decision — two approved phases are in tension.**
+Phase 3 deliberately gave the agent a **superset** of tools including three plausible-but-useless
+ones, because "the agent chose these tools" is meaningless if there was nothing else to choose — that
+superset is the Risk R2 defence. Phase 7's gate then excluded those three from the allowlist. The
+result: **with the gate on, the agent cannot make a wrong tool choice, so support 1.00 is guaranteed
+by construction rather than measured.** The three tools are read-only, move no money and carry no
+authority, so refusing them buys no safety while allowing them restores the property the research
+argument depends on. **Recommendation: allowlist read-only tools.** Not changed unilaterally.
+
+**Honest headline: no research result has been produced.** The probe is ready; it needs trajectories
+from a real model.
+
 
 **This is the Day-4 go/no-go and the most important checkpoint in the build.**
 
