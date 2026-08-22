@@ -1077,3 +1077,171 @@ never offered. Merging them would hide broken model behaviour inside a normal-lo
 No policy gate, no guard, no compiler, no classifier, no router. No real language model — the
 provider adapter is deliberately absent so that the whole suite keeps running offline. No retries or
 backoff on tool calls yet; those arrive with the gate in Phase 7, which is where timeouts belong.
+
+---
+
+## 2026-08-22 — Session 7: Phase 6, making trajectories survive
+
+### First, an honest scope note
+
+When I opened the plan for Phase 6 — "Recorder + trajectory store" — most of it was **already
+done**. Phase 5 was asked for as "live agent + trajectory recording foundation", and that pulled
+the recorder, the in-memory store and the labelling step forward with it. Every test the plan
+listed for Phase 6 was already green.
+
+Rather than invent work to fill the phase, I looked for what was genuinely still missing. Two
+things were:
+
+**1. Nothing was saved.** The store kept trajectories in memory, so they vanished the moment the
+program ended. But the Phase 8 compiler is an *offline batch job* — it runs later, as a separate
+program, and reads recordings made earlier. With an in-memory store that is impossible. The
+compiler would have had nothing to read.
+
+**2. "Round-tripped unchanged" had never actually been tested.** Putting something in a list and
+taking it out again is trivially unchanged — that test proves nothing. The real question is whether
+a trajectory survives being turned into text, written to a file, read back, and rebuilt. That is
+where things break.
+
+So Phase 6 became: **make trajectories durable, and prove they survive the trip.**
+
+### What we built
+
+**A database-backed store** (`SqlTrajectoryStore`). SQLite by default, switchable to Postgres
+later by setting one environment variable. Written with SQLAlchemy Core rather than its ORM —
+Core is closer to plain SQL and easier to read line by line.
+
+**A selection surface.** The compiler will need to ask for specific recordings: *"only the ones
+the checker verified"*, *"only the ones from this model"*. Both stores answer the same four
+filters, combined with AND, always returned in the order they were written.
+
+**One shared contract, two implementations.** The in-memory store and the database store are
+tested by the *same* test class, run twice. If they ever disagree, the tests fail. So code can be
+written against either and swapped without noticing — fast in-memory for tests, durable on disk
+for real runs.
+
+### The design decision I want to remember
+
+**The stored JSON is the truth. The columns are only an index.**
+
+Each row keeps the whole trajectory as canonical JSON text in one column. Alongside it sit a few
+plain columns — which model produced it, what the outcome was, what the checker said. Those exist
+purely so a query can filter quickly.
+
+The rule is: **the columns never decide anything.** They narrow the search; the JSON answers the
+question. This matters because duplicated data drifts — someone changes a field, updates the JSON,
+forgets the column, and now two parts of the same row disagree. A test walks every row, rebuilds
+the trajectory from its JSON, and checks the columns still match. If they ever drift, that test
+fails.
+
+### The measured result
+
+Two **separate programs**. The first writes; the second is a completely fresh interpreter that
+knows nothing except the filename.
+
+```text
+WRITER PROCESS
+  trajectories written : 500
+  verdicts             : {'pass': 500}
+
+READER PROCESS (separate interpreter, nothing shared but the file)
+  trajectories read    : 500
+  file size on disk    : 2,088,960 bytes
+  verdicts             : {'pass': 500}
+  select(verdict=PASS) : 500
+  select(model=offline): 500
+  select(model=other)  : 0
+  select(outcome=esc)  : 0
+
+ROUND-TRIP FIDELITY
+  distinct trajectories       : 500 of 500
+  index columns match payload : True
+
+WHAT THE PHASE 8 COMPILER WILL SEE
+  fee_mismatch 124 · timing_cutoff 109 · transposed_reference 89
+  fx_rounding   75 · partial_payment  60 · duplicate_entry     43
+```
+
+Plus, inside the test suite, 120 trajectories written and read back with **byte-identical**
+content — not merely "equal", but producing the exact same bytes.
+
+### The line that protects the honesty rule
+
+Look at this pair:
+
+```text
+select(model=offline): 500
+select(model=other)  :   0
+```
+
+That is the mechanism that keeps the offline test double out of any reported result. Every
+trajectory records which model produced it, and the store can filter on it. So when Phase 8 asks
+*"do verified runs share a stable procedure?"*, it can be pointed at real-model recordings only,
+and the answer cannot be quietly contaminated by my hand-written stand-in. The rule from last
+session is now enforceable with one argument rather than remembered goodwill.
+
+### The thing most likely to break, which is why I tested it specifically
+
+Dates. A trajectory records when it started and finished. When that is written out as text it
+becomes something like `2026-08-22T10:00:00Z`. But the same instant can also be written
+`2026-08-22T10:00:00+00:00`. Both are correct. Both mean the same moment. **They are different
+text.**
+
+Why that would have been serious: the consistency measurement — the headline result of this whole
+project — works by turning a run into bytes and comparing. If a timestamp came back written a
+different way, two identical runs would produce different bytes and the system would report a
+difference that does not exist. The headline claim would be quietly wrong.
+
+So there is a test that stores a trajectory, reads it back, and checks the timestamps are exactly
+the same value. It passes. But it passes *because it was checked*, not by luck, and if a library
+upgrade ever changes that formatting the test will catch it immediately.
+
+### The errors we hit today
+
+**Error 1 — import ordering.** `ruff` rejected the way I had written
+`from sqlalchemy import ..., select as sql_select, ...`. Trivial, auto-fixed.
+
+**A note on the absence of bigger errors.** This session went unusually smoothly, and I want to
+record *why* rather than just enjoy it. Two reasons, both earned earlier:
+
+- Canonical serialisation was built in Phase 1 and hardened then. Writing to a database is simply
+  "turn it into canonical bytes, store the text". All the hard decisions — sorted keys, no floats,
+  fixed date format — were already made and already tested.
+- The contracts were strict from the start. Rebuilding a trajectory from text runs it through the
+  same validation as building it fresh, so a corrupted row cannot become a half-valid object.
+
+Phase 1 felt slow at the time. This is the session where it paid.
+
+### A contract I changed, deliberately, at the right moment
+
+I added `select` to the `TrajectoryStore` contract. My own rules say that contract is frozen
+**once committed** — and nothing has been committed yet. So this was the last safe moment to
+finalise its shape, and it is better done now than as a breaking change in Phase 8.
+
+### A standard I am still not meeting, said out loud
+
+My own code standards require **structured JSON logging with a correlation id carried through
+every layer**. Six phases in, there is no logging anywhere.
+
+I chose not to add it here, because half-adding it to one module is worse than adding it properly
+once. But it is not a small gap: when the policy gate arrives in Phase 7, every money decision
+should be traceable through the logs, and retro-fitting correlation ids afterwards is painful.
+
+**Proposal for the next session:** a small `rote/observability/` module configuring structlog, and
+the policy gate as the first component to use it — since it is the component whose decisions most
+need to be traceable. Flagged for a decision rather than done quietly.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 306 passed (266 before, 40 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 57 source files |
+| import-linter | 5 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+No policy gate, no guard, no compiler, no classifier. No Postgres — the environment variable makes
+it a configuration change rather than a code change, but only SQLite has actually been run. No
+migrations tool; the single table is created if missing, which is enough for a prototype and
+would not be enough in production.

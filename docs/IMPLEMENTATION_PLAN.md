@@ -344,7 +344,56 @@ model makes the whole suite runnable offline with no API key.
 **Measurable result:** N exceptions resolved end-to-end offline; a test proves `rote.agent`
 cannot import a tool adapter.
 
-### Phase 6 — Recorder + trajectory store · `TODO`
+### Phase 6 — Durable trajectory store · `DONE` (2026-08-22)
+
+**Scope note.** The recorder, in-memory store and labelling were already delivered in Phase 5
+(which was requested as "live agent + trajectory recording foundation"), and every test this phase
+originally listed was already green. Rather than invent work, Phase 6 addressed the two things that
+were genuinely missing: **nothing was persisted**, and **"round-tripped unchanged" had never been
+tested through serialisation** — round-tripping through a list is trivially true and proves nothing.
+The Phase 8 compiler is an offline batch job that must read recordings written by an earlier
+process, which an in-memory store cannot support.
+
+**Measured result — achieved.** Two separate interpreters, sharing only a filename:
+
+```text
+WRITER PROCESS   trajectories written 500   verdicts {pass: 500}
+READER PROCESS   trajectories read    500   file on disk 2,088,960 bytes
+                 select(verdict=PASS) 500   select(model=offline) 500
+                 select(model=other)    0   select(outcome=escalated) 0
+                 index columns match payload: True
+in-suite         120 trajectories round-tripped BYTE-IDENTICAL, not merely equal
+```
+
+306 tests passed (40 new) · ruff clean · `mypy --strict` clean over 57 files · import-linter 5/5.
+
+**`select(model=...)` is the isolation lever you asked for.** Every trajectory records
+`agent_model_id`, so Phase 8 can be pointed at real-model recordings only and cannot be quietly
+contaminated by `offline-heuristic-1`. The rule from Phase 5 is now enforceable with one argument
+rather than remembered goodwill.
+
+**Decisions.** (a) The canonical JSON payload is the source of truth; the indexed columns are a
+projection used only to narrow a query, and a test rebuilds every row from its payload and asserts
+the columns still agree, so the two can never drift. (b) SQLAlchemy **Core**, not the ORM — closer
+to plain SQL and readable line by line. (c) One shared conformance test class runs against both
+stores, so they are interchangeable. (d) Append-only: no update or delete method exists, and a
+duplicate `trajectory_id` is rejected across process boundaries by a unique constraint.
+
+**Contract finalised before first commit.** `select` was added to the `TrajectoryStore` protocol.
+CLAUDE.md §5 freezes that protocol *once committed*, and nothing has been committed yet — so this
+was the last safe moment to settle its shape rather than break it in Phase 8.
+
+**The risk that was specifically tested.** A UTC timestamp can serialise as `...10:00:00Z` or
+`...10:00:00+00:00` — both correct, different text. Since the headline consistency metric compares
+runs byte-for-byte, a reformatted timestamp would report a difference that does not exist. A test
+asserts timestamps survive the round trip exactly.
+
+**Standard still unmet, flagged for decision.** CLAUDE.md requires structured JSON logging with a
+correlation id through every layer; six phases in there is no logging at all. Half-adding it to one
+module is worse than adding it properly once. *Proposal:* a small `rote/observability/` configuring
+structlog, with the policy gate as the first consumer in Phase 7, since its decisions most need to
+be traceable. Not done unilaterally.
+
 
 **Tests first:** every step is captured; the recorder computes fingerprints itself and **rejects**
 a caller-supplied one; `agent_model_id` / `prompt_template_id` / `untrusted_text_paths` /

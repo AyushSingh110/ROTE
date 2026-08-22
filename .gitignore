@@ -13,3 +13,7 @@ dist/
 *.sqlite3
 .env
 .import_linter_cache/
+
+# local trajectory databases
+rote-trajectories.db
+*.db-journal

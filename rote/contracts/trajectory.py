@@ -98,6 +98,16 @@ class TrajectoryStore(Protocol):
 
     def count(self) -> int: ...
 
+    # filters combine as AND and always return insertion order, so a later split is reproducible
+    def select(
+        self,
+        *,
+        domain: Domain | None = None,
+        outcome: Outcome | None = None,
+        verdict: CheckerVerdict | None = None,
+        agent_model_id: str | None = None,
+    ) -> tuple[Trajectory, ...]: ...
+
 
 __all__ = [
     "DEFAULT_MAX_DEPTH",

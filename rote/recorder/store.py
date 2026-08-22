@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from rote.contracts.checker import CheckerVerdict
+from rote.contracts.common import Domain
 from rote.contracts.errors import RecorderError
-from rote.contracts.trajectory import Trajectory
+from rote.contracts.trajectory import Outcome, Trajectory
+from rote.recorder.filters import matches
 
 
 class InMemoryTrajectoryStore:
@@ -21,3 +24,23 @@ class InMemoryTrajectoryStore:
 
     def count(self) -> int:
         return len(self._trajectories)
+
+    def select(
+        self,
+        *,
+        domain: Domain | None = None,
+        outcome: Outcome | None = None,
+        verdict: CheckerVerdict | None = None,
+        agent_model_id: str | None = None,
+    ) -> tuple[Trajectory, ...]:
+        return tuple(
+            trajectory
+            for trajectory in self._trajectories
+            if matches(
+                trajectory,
+                domain=domain,
+                outcome=outcome,
+                verdict=verdict,
+                agent_model_id=agent_model_id,
+            )
+        )
