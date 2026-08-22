@@ -2386,3 +2386,166 @@ that decides whether a result looks normal is Phase 12.
 
 No classifier, no router, no handover to the live agent. When the executor escalates it returns a
 serialisable handover package and stops — nothing yet picks that package up. That is Phase 13.
+
+---
+
+## 2026-08-23 — Session 15: Phase 12, the Guard — and a calibration it fails
+
+### What the Guard is for
+
+The compiled plan is a fixed procedure. It does the same thing every time, which is the whole
+point — and also the danger. **The world changes and the plan does not notice.** A bank alters its
+statement format, a new fee code appears, an amount comes back a thousand times larger than
+anything ever seen. A fixed procedure will carry on regardless.
+
+The Guard is the part that notices. It learned during compilation what "normal" looked like, and it
+compares every result against that.
+
+### Two checkpoints, not one
+
+This is the design decision approved earlier and now built.
+
+**Before the call** — `check_proposed_action`. Runs on the resolved arguments, *before* the policy
+gate. This is where invariants live: *an adjustment may not exceed the amount on the record.*
+
+Why before: an invariant checked after the money moved prevents nothing. There is no point
+discovering that a payment was too large once it has gone.
+
+**After the call** — `check_result`. Runs on the result while it is still quarantined, before it
+becomes state. Four signals: has the *shape* changed, is a *number* out of range, is a *category*
+value one we have never seen, did the call need *retrying*.
+
+Critically, the Guard sits *beside* the gate, never in front of it. It cannot permit anything. It
+can only object. A test asserts the Guard holds no toolbox, imports no adapter, and imports no gate
+— it has no way to make anything happen.
+
+### The measured result
+
+I built five kinds of deliberate corruption and ran every one against every step of every holdout
+run — 529 checks per corruption class.
+
+```text
+injected divergence       checks  aborted  abort %  struct  numeric  categ  behav  median div
+none                         529        0     0.0%       0        0      0      0           0
+schema_drift_missing         529        0     0.0%     499        0      0      0         350
+schema_drift_added           529        0     0.0%     529        0      0      0         140
+type_change                  529        0     0.0%      81        0      0      0           0
+extreme_value                529        0     0.0%       0       81      0      0           0
+unseen_enum                  529        0     0.0%       0        0    378      0         250
+```
+
+Read the `aborted` column. **Zero. Every time.**
+
+### The finding: the Guard sees everything and stops nothing
+
+The signals are *correct*. Look at the columns to their right:
+
+- clean results fire **nothing** — no false alarms at all
+- a vanished field fires structural on 499 of 529 checks, and nothing else
+- an added field fires structural gently, as designed
+- an unseen category value fires categorical on 378, and nothing else
+
+The detection works. The **arithmetic that turns detection into action does not.**
+
+The approved settings weight structural at 0.35 and set the abort threshold at 0.50. So a signal
+screaming at full strength contributes 0.35 — and 0.35 is less than 0.50. **No single signal can
+ever abort a run.** A bank changing its statement format scores 350 against a threshold of 500 and
+sails straight through.
+
+That is not a bug in my code. It is a property of the numbers in the approved architecture, and I
+would rather report it than quietly tune it into looking good. There is now a test that names it
+directly, so it cannot be forgotten:
+
+```python
+def test_no_single_signal_can_abort_under_the_approved_defaults(self) -> None:
+    # the heaviest weight is 350 and the threshold is 500, so one signal at full
+    # strength scores 350 and is let through. Recorded as a calibration finding.
+```
+
+**This is exactly what the Phase 14 threshold sweep exists to decide**, and the table above is its
+input. I have deliberately not picked a new threshold. Choosing one by eye, today, to make the
+number look better, is precisely the "tune the evaluation until the result looks good" that the
+project rules forbid. The sweep picks it, with the missed-divergence against false-abort curve
+visible.
+
+### An honest limit on the table itself
+
+Two of my corruption functions have poor coverage: `type_change` and `extreme_value` only fire on
+81 of 529 checks, because they need an integer nested inside the result and most steps do not
+return one. So those two rows understate what the signals would catch on a fairer set.
+
+That is a weakness in my *test data*, not in the Guard, and Phase 14 needs a proper labelled
+divergence generator rather than five hand-written mutations. Recorded so the numbers are not read
+as more than they are.
+
+### The invariant veto works, and outranks everything
+
+```text
+posting     133510 (half the record        ) -> vetoed=False
+posting     801063 (three times the record ) -> vetoed=True
+with the threshold set so nothing can abort -> vetoed=True
+```
+
+That last line is the important one. An invariant is **not** a weighted signal. It is a veto. Even
+with the threshold set so high that nothing could ever abort, an invariant failure still stops the
+run.
+
+The reason is worth stating plainly: money safety must not be adjustable by the same knob that
+controls sensitivity to cosmetic format changes. Somebody loosening the threshold because they are
+tired of false alarms must not accidentally switch off the rule that stops an over-large payment.
+
+Invariants are named, hand-written functions in a closed list — the plan refers to one by name and
+can never contain one. An unknown name **raises**; it is never skipped. And a missing field makes an
+invariant *fail*, not pass: absence is not evidence of safety.
+
+### Keeping the whole thing free of floats
+
+Every score is stored as a whole number out of 1000 rather than a decimal. That looks fussy but it
+follows the rule set in Phase 1: a decimal has no single guaranteed text form, and these verdicts
+have to be stored, compared, and swept over in Phase 14. Integers keep that comparison exact.
+
+### The mistake I have now made four times
+
+`ruff` caught me writing a test that accepts *any* error rather than the specific one. Phase 4,
+Phase 5, Phase 12 — and each time the linter caught it and I fixed it.
+
+I noted last session that writing a lesson in the journal twice changed nothing, and that building a
+guard was what worked. Here the guard already exists: **the linter is the thing that catches this,
+every single time, and it has never once let it through.** The lesson is not "try harder to
+remember". It is that the strict gate is doing work I demonstrably cannot do from memory, and that
+is the argument for never relaxing it.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 609 passed (565 before, 44 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 94 source files |
+| import-linter | 7 contracts kept, 0 broken |
+
+### A contract change, made in the open
+
+The structural signal has to tell a *new optional field* apart from one that *vanished* — a gentle
+0.4 versus a full 1.0. The expectation only stored fingerprints, which can say "different" but not
+"different how".
+
+So `StepExpectation` gained two fields recording which paths and types were seen in **every** run
+and which were seen in **any** run. Both are **additive with empty defaults**, so every plan
+compiled before today still validates and simply gets the older, blunter binary signal. Same safe
+category as the activation fields added in Phase 10.
+
+### What is deliberately not done
+
+**No threshold has been chosen.** The Guard runs at the approved defaults and the calibration
+finding stands unaddressed on purpose, for Phase 14 to settle with evidence.
+
+**Behavioural is implemented but never fires in practice**, because nothing retries yet — the
+retry-with-backoff machinery belongs with the adapters. The signal is tested directly and is ready
+for when it exists.
+
+**Invariants are not attached to any compiled plan yet.** The registry works, the veto works, and
+the Guard evaluates whatever names a step carries — but the compiler never invents an invariant, so
+which invariant belongs on which category is a hand-written table still to be written.
+
+No classifier, no router, no handover consumer. Phase 13.

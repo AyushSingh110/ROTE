@@ -724,7 +724,61 @@ identical `outcome_hash`; handover state serialises before the guard runs.
 **Measurable result:** **exactly one distinct `outcome_hash` across 20 identical runs** of a
 slot-free plan.
 
-### Phase 12 — Guard + invariant registry · `TODO`
+### Phase 12 — Guard + invariant registry · `DONE` (2026-08-23)
+
+**Measured result — per-signal firing on a labelled divergence set** (529 checks per class):
+
+```text
+injected divergence       checks  aborted  abort %  struct  numeric  categ  behav  median div
+none                         529        0     0.0%       0        0      0      0           0
+schema_drift_missing         529        0     0.0%     499        0      0      0         350
+schema_drift_added           529        0     0.0%     529        0      0      0         140
+type_change                  529        0     0.0%      81        0      0      0           0
+extreme_value                529        0     0.0%       0       81      0      0           0
+unseen_enum                  529        0     0.0%       0        0    378      0         250
+```
+
+609 tests passed (44 new) · ruff clean · `mypy --strict` clean over 94 files · import-linter 7/7.
+
+**⚠ FINDING: the Guard sees everything and stops nothing.** The signals are *correct* — clean
+results fire nothing (zero false alarms), a vanished field fires structural on 499/529 and nothing
+else, an unseen category fires categorical on 378/529 and nothing else. But §D2's approved settings
+weight structural at 350 with an abort threshold of 500, so **a signal at full strength contributes
+350, and no single signal can ever abort.** A bank changing its statement format scores 350 against
+500 and sails through. Not a code bug — a property of the approved numbers, and reported rather than
+quietly tuned. A test names it directly:
+`test_no_single_signal_can_abort_under_the_approved_defaults`. **This is exactly what the Phase 14
+sweep exists to settle**, and the table above is its input; picking a threshold by eye today to make
+the number look better is the forbidden "tune until it looks good".
+
+**Honest limit on the table.** `type_change` and `extreme_value` fire on only 81/529 because both
+need an integer nested in the result and most steps return none — a weakness in my five hand-written
+mutations, not in the Guard. Phase 14 needs a proper labelled divergence generator.
+
+**The invariant veto works and outranks everything.** Posting 3× the record amount is vetoed; with
+the threshold set so nothing could ever abort, it is *still* vetoed. Money safety must not be
+adjustable by the same knob that controls sensitivity to cosmetic format drift. Invariants are named
+functions in a closed registry — a plan refers to one and can never contain one; an unknown name
+**raises** rather than being skipped; and a missing field makes an invariant **fail**, because
+absence is not evidence of safety.
+
+**Decisions.** (a) Two checkpoints: `check_proposed_action` runs on resolved arguments **before** the
+gate (an invariant checked after the money moved prevents nothing); `check_result` runs on the
+quarantined result before commit. (b) The Guard sits *beside* the gate and can only object — a test
+asserts it holds no toolbox and imports neither an adapter nor the gate. (c) Every score is stored
+as an integer per mille, so verdicts stay exactly comparable for the Phase 14 sweep. (d) The raw
+per-signal vector is recorded on **every** check including passes.
+
+**Contract change, additive and defaulted.** `StepExpectation` gained `schema_always` / `schema_ever`
+so the structural signal can tell a new optional field (0.4) from one that vanished (1.0). Empty
+defaults mean every previously compiled plan still validates and gets the older binary signal — same
+safe category as Phase 10's activation fields.
+
+**Deliberately not done.** No threshold chosen — the calibration finding stands open for Phase 14.
+Behavioural is implemented and unit-tested but never fires in practice because nothing retries yet.
+Invariants are not yet attached to any compiled plan: the registry and veto work, but the
+category→invariant table is hand-written work still to do.
+
 
 Subject to Q1 above.
 

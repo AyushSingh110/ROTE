@@ -54,16 +54,26 @@ class RecordingToolbox:
         return dict(self._results[name])
 
 
-class AlwaysReject:
-    def inspect(self, step: PlanStep, result: dict[str, Any]) -> ResultVerdict:
+class AcceptsEveryProposal:
+    def check_proposed_action(
+        self, step: PlanStep, arguments: dict[str, Any], task_input: dict[str, Any]
+    ) -> ResultVerdict:
+        del step, arguments, task_input
+        return ResultVerdict(passed=True)
+
+
+class AlwaysReject(AcceptsEveryProposal):
+    def inspect(self, step: PlanStep, result: dict[str, Any], attempts: int = 1) -> ResultVerdict:
+        del result, attempts
         return ResultVerdict(passed=False, reason=f"rejecting {step.tool}")
 
 
-class RejectFrom:
+class RejectFrom(AcceptsEveryProposal):
     def __init__(self, index: int) -> None:
         self._index = index
 
-    def inspect(self, step: PlanStep, result: dict[str, Any]) -> ResultVerdict:
+    def inspect(self, step: PlanStep, result: dict[str, Any], attempts: int = 1) -> ResultVerdict:
+        del result, attempts
         if step.index >= self._index:
             return ResultVerdict(passed=False, reason=f"rejecting step {step.index}")
         return ResultVerdict(passed=True)

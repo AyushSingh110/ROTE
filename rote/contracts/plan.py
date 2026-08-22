@@ -75,6 +75,10 @@ class StepExpectation(BaseModel):
     categorical_domains: dict[str, frozenset[str]]
     invariants: tuple[str, ...] = ()
     sample_count: int = Field(ge=1)
+    # 'path|type' pairs seen in every run, and ever seen, so the guard can tell a new
+    # optional field apart from one that vanished
+    schema_always: frozenset[str] = frozenset()
+    schema_ever: frozenset[str] = frozenset()
 
 
 class PlanStep(BaseModel):

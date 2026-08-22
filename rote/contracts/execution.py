@@ -23,6 +23,7 @@ class EscalationReason(StrEnum):
     GATE_CAP_EXCEEDED = "gate_cap_exceeded"
     UNKNOWN_ACTION_STATE = "unknown_action_state"
     RESULT_DIVERGENCE = "result_divergence"
+    INVARIANT_VETO = "invariant_veto"
     TOOL_ERROR = "tool_error"
 
 
@@ -63,7 +64,13 @@ class ResultVerdict(BaseModel):
 
 
 class ResultInspector(Protocol):
-    def inspect(self, step: PlanStep, result: dict[str, Any]) -> ResultVerdict: ...
+    def check_proposed_action(
+        self, step: PlanStep, arguments: dict[str, Any], task_input: dict[str, Any]
+    ) -> ResultVerdict: ...
+
+    def inspect(
+        self, step: PlanStep, result: dict[str, Any], attempts: int = 1
+    ) -> ResultVerdict: ...
 
 
 class ExecutionResult(BaseModel):

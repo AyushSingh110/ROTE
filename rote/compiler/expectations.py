@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from rote.contracts.fingerprint import structural_fingerprint
+from rote.contracts.fingerprint import structural_fingerprint, structural_schema
 from rote.contracts.paths import enumerate_paths
 from rote.contracts.plan import StepExpectation
 
@@ -33,8 +33,11 @@ def learn_expectation(results: Sequence[dict[str, Any]]) -> StepExpectation:
             if _is_categorical(len(distinct), len(values)):
                 categorical[path] = distinct
 
+    schemas = [{f"{path}|{kind}" for path, kind in structural_schema(result)} for result in results]
     return StepExpectation(
         result_fingerprints=frozenset(structural_fingerprint(r) for r in results),
+        schema_always=frozenset(set.intersection(*schemas)),
+        schema_ever=frozenset(set.union(*schemas)),
         numeric_observed=numeric_observed,
         numeric_widened=numeric_widened,
         categorical_domains=categorical,

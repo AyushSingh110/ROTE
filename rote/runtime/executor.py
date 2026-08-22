@@ -26,8 +26,14 @@ GATE_REASONS: dict[GateVerdict, EscalationReason] = {
 
 
 class AcceptEveryResult:
-    def inspect(self, step: PlanStep, result: dict[str, Any]) -> ResultVerdict:
-        del step, result
+    def check_proposed_action(
+        self, step: PlanStep, arguments: dict[str, Any], task_input: dict[str, Any]
+    ) -> ResultVerdict:
+        del step, arguments, task_input
+        return ResultVerdict(passed=True)
+
+    def inspect(self, step: PlanStep, result: dict[str, Any], attempts: int = 1) -> ResultVerdict:
+        del step, result, attempts
         return ResultVerdict(passed=True)
 
 
@@ -47,6 +53,19 @@ def execute_plan(
         resolved = _resolve_arguments(step, state)
         if resolved is None:
             return _escalate(plan, calls, EscalationReason.BINDING_UNRESOLVED, state, step, None)
+
+        # the invariant checkpoint sits before the gate; it does not replace it
+        proposed = check.check_proposed_action(step, resolved, state.task_input)
+        if not proposed.passed:
+            return _escalate(
+                plan,
+                calls,
+                EscalationReason.INVARIANT_VETO,
+                state,
+                step,
+                None,
+                proposed.reason,
+            )
 
         try:
             result = toolbox.invoke(step.tool, resolved)
