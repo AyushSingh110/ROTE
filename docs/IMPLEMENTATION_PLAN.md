@@ -245,7 +245,42 @@ seed-reproducible.
 
 **Measurable result:** 500 exceptions across 6 categories, seed-reproducible byte-for-byte.
 
-### Phase 4 — Code-only Outcome Checker · `TODO`
+### Phase 4 — Code-only Outcome Checker · `DONE` (2026-08-22)
+
+**Measured result — achieved.**
+
+```text
+checker version: reconciliation-1        (500 exceptions, seed 13)
+correctly resolved            pass 500   fail   0   undetermined   0
+untouched (nothing done)      pass   0   fail   0   undetermined 500
+corrupted (wrong bank line)   pass   0   fail 500   undetermined   0
+unfinished (never closed)     pass   0   fail   0   undetermined 500
+path independence: the same 500 endings reached by a different tool order -> identical verdicts
+per category (correct): fee 124/124 · timing 109/109 · transposed 89/89 · fx 75/75 ·
+                        partial 60/60 · duplicate 43/43
+```
+
+199 tests passed (33 new) · ruff clean · `mypy --strict` clean over 40 files · import-linter 5/5.
+
+**Decisions.** (a) The third verdict is `UNDETERMINED`, the approved §A10 name — deliberately
+**not** `UNKNOWN`, which is already the action state for "we sent a money instruction and then
+crashed". Two different concepts must not share a name. (b) The verdict rule: an unclosed record
+is `UNDETERMINED` regardless of side effects, because escalation is a safe outcome and must never
+count as a wrong answer; mismatches are still listed, so nothing is hidden. `UNDETERMINED` runs are
+ineligible for compilation, so an unfinished run can never teach a habit. (c) `check_outcome` takes
+`ReconciliationFacts`, not `ReconciliationException` — that type has no free-text field, so the
+checker **structurally cannot** read merchant notes. (d) Mismatches carry typed codes, so the
+Phase 16 accuracy report can break failures down by cause rather than counting them.
+
+**Risk R2 guard.** The reference resolver that produces correct endings for these tests lives in
+`tests/domain/reference_resolver.py` and a test asserts no file under `rote/` mentions it. If that
+hand-written correct procedure ever produced trajectories, the compiler would rediscover what was
+written by hand and the central result would be void.
+
+**Reading note for the report.** `skip_adjustment` and `double_post` corruptions show 241 pass /
+259 fail. That is correct, not a gap: 241 exceptions (timing 109 + transposed 89 + duplicate 43)
+need no adjustment at all, so those corruptions are no-ops for them. 124 + 75 + 60 = 259.
+
 
 **Tests first:** returns `PASS` on a correct end state; `FAIL` on a corrupted one; `UNDETERMINED`
 when the end state is incomplete; never reads the tool sequence or the agent's claims (asserted

@@ -667,3 +667,195 @@ not just promised.
 | ruff | all checks passed |
 | mypy --strict | no issues in 36 source files |
 | import-linter | 5 contracts kept, 0 broken |
+
+---
+
+## 2026-08-22 — Session 5: Phase 4, the code-only Outcome Checker
+
+### What we built and why
+
+The **checker**: a small piece of plain code that looks at the world after a run and says one of
+three things — **pass**, **fail**, or **undetermined**.
+
+Why this matters more than its size suggests. The checker is the only source of truth in the
+whole project. It does two jobs that nothing else can do:
+
+1. It decides which recorded runs are allowed to teach the compiler. A run the checker did not
+   confirm can never become part of a compiled plan.
+2. It produces the accuracy number that Rote and the plain AI agent are compared on.
+
+If the checker is generous, the compiler learns from bad runs and the accuracy number is a lie.
+So it had to be built carefully, and early.
+
+### The one rule that defines it
+
+**The checker looks at the ending. It never looks at the journey.**
+
+It is not allowed to know which tools were called, in what order, or how confident the model was.
+It only sees three things:
+
+- the **facts** of the exception (amounts, dates, ids — no free text)
+- the **ground truth** (what the ending should be)
+- the **world** as it now stands
+
+That restriction is enforced by the function's own shape. It takes `ReconciliationFacts`, and
+that type has no field for merchant notes at all. So the checker **cannot** read attacker-written
+text even if someone later tried to make it. A test asserts this.
+
+Why the rule matters. If the checker could see the path taken, it would end up rewarding a
+particular path. The compiler would then learn to imitate the checker rather than to resolve an
+exception, and the entire result would be circular.
+
+The proof this works is the strongest test in the phase: resolve all 500 exceptions in one order,
+then resolve them again in a **different** order — closing the record first instead of last — and
+the checker returns the identical 500 verdicts.
+
+### The three verdicts, and where the line sits
+
+- **pass** — the record was closed and everything matches the ground truth.
+- **fail** — the record was closed, but something is wrong: wrong bank line, wrong status, wrong
+  adjustment amount, wrong currency, wrong reason, a missing adjustment, a duplicate adjustment,
+  or the wrong statement line voided.
+- **undetermined** — the record was never closed, or the world does not contain what we are
+  supposed to be checking.
+
+**Undetermined is not a soft failure. It is a real answer.** It means "this run did not finish, so
+there is no outcome to judge." That is exactly what happens when a case is escalated to a human —
+and escalation is a *safe* outcome in this design, not a wrong one. Counting escalation as a
+failure would push the whole system toward guessing rather than handing over, which is the
+opposite of what Rote is for.
+
+Undetermined runs are also barred from teaching the compiler, so an unfinished run can never
+become a habit.
+
+### The measured result
+
+```text
+checker version: reconciliation-1
+
+VERDICT DISTRIBUTION OVER 500 EXCEPTIONS
+correctly resolved            pass 500   fail   0   undetermined   0
+untouched (nothing done)      pass   0   fail   0   undetermined 500
+corrupted (wrong bank line)   pass   0   fail 500   undetermined   0
+unfinished (never closed)     pass   0   fail   0   undetermined 500
+
+PATH INDEPENDENCE
+  the same 500 endings reached by a different tool order -> identical verdicts: True
+
+PASS RATE BY CATEGORY (correctly resolved)
+  fee_mismatch          124/124      timing_cutoff        109/109
+  transposed_reference   89/89       fx_rounding           75/75
+  partial_payment        60/60       duplicate_entry       43/43
+```
+
+Every one of the six categories is genuinely exercised, so the checker is not passing because
+some category never appears.
+
+### A number that looks like a bug until you do the arithmetic
+
+Two of the corruption runs gave a result that looks wrong at first glance:
+
+```text
+corrupted (no adjustment)     pass 241   fail 259
+corrupted (double posted)     pass 241   fail 259
+```
+
+Why did 241 cases still pass when I deliberately broke them? Because those corruptions only make
+sense where an adjustment exists at all. Three of the six categories — timing cut-off, transposed
+reference and duplicate entry — correctly need **no** adjustment. Skipping an adjustment that was
+never required is not a corruption; it is the correct behaviour.
+
+Check the arithmetic: 109 timing + 89 transposed + 43 duplicate = **241**. And
+124 fee + 75 FX + 60 partial = **259**. The split is exact.
+
+**The lesson:** before assuming a surprising number is a bug, see whether it adds up. Here it
+added up perfectly, and understanding why took thirty seconds. Guessing would have cost an hour.
+
+### The errors we hit today
+
+**Error 1 — I wrote a test that could pass for the wrong reason.**
+
+*What broke.* `ruff` refused this:
+
+```text
+B017 `pytest.raises(Exception)` should be considered evil
+```
+
+*The real cause.* I wrote a test saying "creating this object with a bad field should raise an
+error", and I accepted **any** error at all. That test would still pass if the code failed because
+of a typo, a missing import, or something entirely unrelated. It proves almost nothing.
+
+*How we fixed it.* Changed it to expect the specific error — `ValidationError` — so the test only
+passes when the boundary validation actually did its job.
+
+*What I should have noticed sooner.* A test that accepts any failure is barely a test. In this
+project that is worse than useless, because the whole argument rests on tests being trustworthy.
+The linter caught a real weakness, not a style preference.
+
+**Error 2 — I wrote something clever and unreadable, then removed it.**
+
+*What broke.* Nothing failed, but in the test oracle I had written:
+
+```python
+lambda: tools.invoke(...) and None
+```
+
+That is a trick to make an expression return `None` so the types line up. It works. It is also
+confusing to read, and my own rule for this project is that I must be able to explain every line.
+
+*How we fixed it.* Replaced it with a small named function, `_void(...)`. Three lines longer,
+instantly readable.
+
+*What I should have noticed sooner.* The moment I reach for a trick to satisfy a type checker, it
+usually means I should write a named function instead. Cleverness in a money system is a cost, not
+a saving.
+
+**Error 3 — everything passed on the first run, which made me suspicious.**
+
+All 199 tests went green immediately after writing the checker. That is unusual enough that I did
+not simply accept it. I went back and confirmed the tests would actually catch a broken checker,
+by running ten separate deliberate corruptions and checking each one produced the *specific*
+expected failure code — not merely "a failure".
+
+*Why it went smoothly, honestly:* two decisions from earlier sessions did the work. The adjustment
+sign convention was already settled in Phase 3 (after getting it wrong there), and the pass /
+fail / undetermined rule was written down before any test was written. Most checker bugs come from
+those two things being decided while coding.
+
+### Design decisions worth remembering
+
+**1. The third verdict is called `undetermined`, not `unknown`.**
+This is deliberate, because `UNKNOWN` is already taken. In the policy gate rules, `UNKNOWN` means
+"we sent a money instruction and then crashed, so we do not know whether it happened." That is a
+completely different situation from "the agent did not finish this case." Giving two different
+ideas the same name is how confusion gets baked into a system permanently, so they stay apart.
+
+**2. Failures carry typed codes, not free-text messages.**
+Each mismatch has a code such as `adjustment_total_mismatch` or `matched_line_mismatch`, plus a
+readable detail. Codes mean the final accuracy report can say *how* runs failed, not just how
+many. Free text could not be counted.
+
+**3. The checker reports side effects even when it says "undetermined".**
+If a run never closed the record but did post a wrong adjustment, the verdict is undetermined —
+but the wrong adjustment still appears in the mismatch list. So nothing is hidden by the verdict.
+
+**4. The "correct answer" script lives in the tests, never in the product.**
+To test the checker I needed something that actually resolves the exceptions correctly. That
+script exists — but it lives in `tests/`, and a test asserts that **no file under `rote/` ever
+mentions it**. This matters: if that hand-written correct procedure were ever used to produce
+training runs, the compiler would just be rediscovering something I wrote, and the central result
+of the project would be worthless.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 199 passed (166 before, 33 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 40 source files |
+| import-linter | 5 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+No agent, no recorder, no policy gate, no compiler. Phase 5 is the hand-written live agent loop
+and it has not been started.
