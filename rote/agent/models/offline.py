@@ -154,7 +154,6 @@ class OfflineHeuristicModel:
                 "void_duplicate_bank_line",
                 {
                     "line_id": candidates[1],
-                    "idempotency_key": f"{facts['record_id']}:void",
                 },
             )
         return self._close(facts, done, target, "matched")
@@ -170,7 +169,6 @@ class OfflineHeuristicModel:
                 "record_id": facts["record_id"],
                 "bank_line_id": target,
                 "status": status,
-                "idempotency_key": f"{facts['record_id']}:close",
             },
         )
 
@@ -196,7 +194,6 @@ def _post(facts: dict[str, Any], minor_units: int, currency: str, reason: str) -
             "minor_units": minor_units,
             "currency": currency,
             "reason": reason,
-            "idempotency_key": f"{facts['record_id']}:adjust",
         },
     )
 

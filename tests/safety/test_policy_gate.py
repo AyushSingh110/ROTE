@@ -149,14 +149,17 @@ def tight_config(per_action: int) -> PolicyConfig:
     )
 
 
-def adjust(data: GeneratedDataset, amount: int, key: str = "k-1") -> dict[str, Any]:
+def adjust(data: GeneratedDataset, amount: int) -> dict[str, Any]:
     return {
         "record_id": data.exceptions[0].facts.record_id,
         "minor_units": amount,
         "currency": "INR",
         "reason": "fee",
-        "idempotency_key": key,
     }
+
+
+def adjust_with_key(data: GeneratedDataset, amount: int) -> dict[str, Any]:
+    return {**adjust(data, amount), "idempotency_key": "caller-chosen"}
 
 
 class TestTheGateIsTheToolBoundary:
@@ -235,10 +238,10 @@ class TestMonetaryCaps:
     def test_the_rolling_window_accumulates_across_calls(self) -> None:
         data, gate, _ledger, _tools = build(config=tight_config(1_000))
         box = gate.for_task(context(data))
-        for index in range(3):
-            box.invoke("post_adjustment", adjust(data, 1_000, key=f"k-{index}"))
+        for amount in (1_000, 999, 998):
+            box.invoke("post_adjustment", adjust(data, amount))
         with pytest.raises(PolicyError) as raised:
-            box.invoke("post_adjustment", adjust(data, 1, key="k-final"))
+            box.invoke("post_adjustment", adjust(data, 997))
         assert raised.value.verdict is GateVerdict.ESCALATE
 
     def test_spend_outside_the_window_no_longer_counts(self) -> None:
@@ -251,13 +254,13 @@ class TestMonetaryCaps:
             clock=clock,
         )
         box = gate.for_task(context(data))
-        for index in range(3):
-            box.invoke("post_adjustment", adjust(data, 1_000, key=f"k-{index}"))
+        for amount in (1_000, 999, 998):
+            box.invoke("post_adjustment", adjust(data, amount))
         with pytest.raises(PolicyError):
-            box.invoke("post_adjustment", adjust(data, 1_000, key="k-over"))
+            box.invoke("post_adjustment", adjust(data, 997))
 
         clock.now += timedelta(hours=2)
-        assert box.invoke("post_adjustment", adjust(data, 1_000, key="k-later"))
+        assert box.invoke("post_adjustment", adjust(data, 996))
 
     def test_a_currency_with_no_declared_cap_is_refused(self) -> None:
         data, gate, _ledger, _tools = build(config=tight_config(50_000))
@@ -311,19 +314,11 @@ class TestAmendmentA2NoImplicitLiveAgentPrivilege:
         with pytest.raises(PolicyError):
             box.invoke(
                 "void_duplicate_bank_line",
-                {"line_id": data.world.bank_lines[0].line_id, "idempotency_key": "k-void"},
+                {"line_id": data.world.bank_lines[0].line_id},
             )
 
 
 class TestIdempotencyAndAtMostOnce:
-    def test_a_mutating_call_without_an_idempotency_key_is_refused(self) -> None:
-        data, gate, _ledger, _tools = build()
-        payload = adjust(data, 100)
-        del payload["idempotency_key"]
-        with pytest.raises(PolicyError) as raised:
-            gate.for_task(context(data)).invoke("post_adjustment", payload)
-        assert raised.value.verdict is GateVerdict.REFUSE
-
     def test_intent_is_written_before_outcome(self) -> None:
         data, gate, ledger, _tools = build()
         gate.for_task(context(data)).invoke("post_adjustment", adjust(data, 100))
@@ -337,14 +332,14 @@ class TestIdempotencyAndAtMostOnce:
         )
         assert LedgerEventType.INTENT not in {e.event_type for e in ledger.entries}
 
-    def test_replaying_a_key_returns_the_same_result(self) -> None:
+    def test_replaying_the_same_action_returns_the_same_result(self) -> None:
         data, gate, _ledger, _tools = build()
         box = gate.for_task(context(data))
         first = box.invoke("post_adjustment", adjust(data, 100))
         second = box.invoke("post_adjustment", adjust(data, 100))
         assert first == second
 
-    def test_replaying_a_key_never_calls_the_adapter_again(self) -> None:
+    def test_replaying_the_same_action_never_calls_the_adapter_again(self) -> None:
         data = dataset(6)
         counting = CountingTools(ReconciliationTools.from_snapshot(data.world))
         _d, gate, _ledger, _t = build(tools=counting, count=6)
@@ -353,12 +348,12 @@ class TestIdempotencyAndAtMostOnce:
         box.invoke("post_adjustment", adjust(data, 100))
         assert counting.calls.count("post_adjustment") == 1
 
-    def test_reusing_a_key_for_different_arguments_is_refused(self) -> None:
+    def test_a_different_amount_is_a_different_action_not_a_replay(self) -> None:
         data, gate, _ledger, _tools = build()
         box = gate.for_task(context(data))
-        box.invoke("post_adjustment", adjust(data, 100))
-        with pytest.raises(PolicyError):
-            box.invoke("post_adjustment", adjust(data, 200))
+        first = box.invoke("post_adjustment", adjust(data, 100))
+        second = box.invoke("post_adjustment", adjust(data, 200))
+        assert first != second
 
 
 class TestUnknownOutcome:
@@ -422,7 +417,7 @@ class TestLedgerRecording:
         data, gate, ledger, _tools = build()
         box = gate.for_task(context(data))
         for index in range(10):
-            box.invoke("post_adjustment", adjust(data, 100, key=f"k-{index}"))
+            box.invoke("post_adjustment", adjust(data, 100 + index))
         assert ledger.verify().valid is True
 
     def test_the_dry_run_flag_reaches_the_ledger(self) -> None:
@@ -506,3 +501,60 @@ class TestObservationalToolsGrantNoAuthority:
         assert live is not None
         assert compiled is not None
         assert live.allowed_tools == compiled.allowed_tools
+
+
+class TestTheGateOwnsTheIdempotencyKey:
+    def test_a_caller_supplied_key_is_refused(self) -> None:
+        data, gate, _ledger, _tools = build()
+        with pytest.raises(PolicyError) as raised:
+            gate.for_task(context(data)).invoke("post_adjustment", adjust_with_key(data, 100))
+        assert raised.value.verdict is GateVerdict.REFUSE
+        assert "derive" in raised.value.reason
+
+    def test_a_mutating_call_needs_no_key_from_the_caller(self) -> None:
+        data, gate, _ledger, _tools = build()
+        assert gate.for_task(context(data)).invoke("post_adjustment", adjust(data, 100))
+
+    def test_the_key_never_appears_in_the_advertised_interface(self) -> None:
+        data, gate, _ledger, _tools = build()
+        for spec in gate.for_task(context(data)).available_tools():
+            assert "idempotency_key" not in spec.parameters.get("properties", {})
+            assert "idempotency_key" not in spec.parameters.get("required", [])
+
+    def test_the_same_action_derives_the_same_key(self) -> None:
+        data, gate, ledger, _tools = build()
+        box = gate.for_task(context(data))
+        box.invoke("post_adjustment", adjust(data, 100))
+        box.invoke("post_adjustment", adjust(data, 100))
+        intents = [e for e in ledger.entries if e.event_type is LedgerEventType.INTENT]
+        assert len(intents) == 1
+
+    def test_a_different_amount_derives_a_different_key(self) -> None:
+        data, gate, ledger, _tools = build()
+        box = gate.for_task(context(data))
+        box.invoke("post_adjustment", adjust(data, 100))
+        box.invoke("post_adjustment", adjust(data, 200))
+        intents = [e for e in ledger.entries if e.event_type is LedgerEventType.INTENT]
+        assert len(intents) == 2
+
+    def test_the_same_action_for_a_different_task_derives_a_different_key(self) -> None:
+        data, gate, ledger, _tools = build()
+        gate.for_task(context(data, 0)).invoke("post_adjustment", adjust(data, 100))
+        gate.for_task(context(data, 1)).invoke("post_adjustment", adjust(data, 100))
+        intents = [e for e in ledger.entries if e.event_type is LedgerEventType.INTENT]
+        assert len(intents) == 2
+
+    def test_the_derived_key_reaches_the_adapter(self) -> None:
+        data = dataset(6)
+        inner = ReconciliationTools.from_snapshot(data.world)
+        _d, gate, _ledger, _t = build(tools=inner, count=6)
+        gate.for_task(context(data)).invoke("post_adjustment", adjust(data, 100))
+        posted = inner.snapshot().adjustments
+        assert len(posted) == 1
+        assert posted[0].idempotency_key.startswith(data.exceptions[0].exception_id)
+
+    def test_the_ledger_records_the_derived_key(self) -> None:
+        data, gate, ledger, _tools = build()
+        gate.for_task(context(data)).invoke("post_adjustment", adjust(data, 100))
+        intent = next(e for e in ledger.entries if e.event_type is LedgerEventType.INTENT)
+        assert intent.payload["key"]

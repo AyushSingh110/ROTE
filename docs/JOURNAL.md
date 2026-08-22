@@ -1796,3 +1796,131 @@ are Phase 10, and validation passing is not the same as being allowed to run.
 
 **And the standing caveat:** every number here carries `research grade: False`. This shows the
 compiler works. It says nothing yet about reconciliation.
+
+---
+
+## 2026-08-22 — Session 11: the gate takes back the idempotency key, and what `minor_units` really is
+
+### Part one — moving the idempotency key to where it belongs
+
+Phase 9 found that one argument was blocking every single category from compiling: the
+**idempotency key**.
+
+A reminder of what that key is for. Every money-moving instruction carries a name. If the same
+instruction is sent twice with the same name, the second one is recognised as a repeat and does
+nothing. It is what stops a retry becoming a second payment.
+
+The problem was that the *agent* was inventing the name and passing it in as an argument. So the
+compiler, watching recordings, saw a value that changed with every case and had no idea where it
+came from — because it came from nowhere. It was made up.
+
+The architecture had already said the right answer: the key is derived from the exception, the
+action, and the arguments. That is arithmetic on things the gate already knows. It was never the
+agent's to choose.
+
+**So the gate now computes it.** Three consequences, and the second one is a genuine security
+improvement I had not been looking for:
+
+1. **The compiler stops trying to learn it.** It is no longer in the recorded arguments at all,
+   because the agent never supplies it.
+2. **A caller can no longer choose its own key — the gate refuses one outright.** This closes a
+   hole I had not spotted. Previously an agent could have picked a key matching an earlier action
+   and been handed the earlier *result* instead of its instruction actually happening. Now the key
+   is a function of what is being done, so choosing it is impossible.
+3. **The key is not even shown to the agent.** The gate strips it from the tool descriptions it
+   advertises. The agent cannot supply what it has never been shown.
+
+There is a knock-on effect worth writing down, because it changes behaviour. Posting the *identical*
+adjustment to the same record twice now collapses into one action. Previously the agent could do it
+twice by using two different names. That was never right — two identical adjustments to one record
+**is** a double-post — and the old behaviour let the agent walk around the protection. Several tests
+had to change to use genuinely different amounts rather than different names, which is a better test
+anyway.
+
+### Part two — what `minor_units` actually is
+
+The other blocker was the amount of the correction. My note last session said this probably needed
+"rule induction", which in the architecture means fitting a small decision tree — and that would
+mean adding scikit-learn.
+
+I was asked to check that properly before adding anything. I am glad I did, because the answer is
+**no, and not for the reason I expected.**
+
+**A decision tree cannot do this job at all.** A decision tree works by splitting the data into
+groups and predicting one fixed number for each group. The architecture caps it at depth three,
+which means at most eight groups, so at most eight different answers. But across ninety-three fee
+cases the correction amount takes ninety-three *different* values. It is not a choice between a few
+options. It is a calculation.
+
+So scikit-learn would not be an unnecessary dependency here. It would be the **wrong tool**, and it
+would fail its own acceptance test immediately.
+
+**What it actually is.** The correction is a subtraction:
+
+> what we recorded, minus what the bank paid.
+
+Both of those are ordinary typed fields on the incoming exception. For the cross-currency cases
+there is one extra step — convert first using the rate that an earlier step already fetched — but
+it is still plain integer arithmetic.
+
+**I did not assume this. I searched for it.** I wrote four hand-written integer formulas, gathered
+every whole-number field visible at that point in the run, and tried every combination against
+every run, keeping only formulas that matched *every single one*. Then I checked the winners
+against the holdout runs that nothing had touched:
+
+```text
+fee_mismatch      difference(internal.minor_units, bank.minor_units)             31/31 holdout
+partial_payment   difference(internal.minor_units, bank.minor_units)             21/21 holdout
+fx_rounding       scaled_difference(internal, bank, rate_micros from step 1)     29/29 holdout
+```
+
+**81 out of 81 unseen runs reproduced exactly.** No model, no training, no new library.
+
+The search also turned up something I should have expected: **more than one formula fits.**
+`internal minus bank` works, and so does `the record amount from step 0 minus bank` — because
+step 0's record amount *is* the internal amount. And for the currency case, swapping two operands
+of a multiplication gives an identical answer, because multiplication does not care about order.
+
+That is the same trap as ambiguous field paths, and it needs the same answer: **pick one, and write
+the others down.** A coincidence that holds for ninety-three runs is exactly the sort of thing that
+breaks quietly later.
+
+### What I am proposing, and not doing
+
+This needs a **new kind of binding** — a named, hand-written formula referenced by name, with its
+inputs given as ordinary bindings. It is the same shape as the invariant registry: a plan
+*references* a formula, it can never *contain* one. No expression language, nothing evaluated from
+text, nothing learned.
+
+That is a change to the approved architecture, so it is written up and waiting rather than built.
+
+### The mistake I keep making
+
+Editing files by searching for a block of their text failed **again** — third session running. The
+formatter reflows lines, my search no longer matches, nothing is replaced, and the script reports
+success.
+
+This time I finally fixed the *process* rather than the symptom: the patch script now checks every
+replacement actually landed and stops with a loud `MISSED` if any did not. It caught nothing on the
+run, which is the point — it now cannot fail silently.
+
+**What I should have noticed sooner:** I wrote this lesson in the journal twice and changed nothing.
+Writing a lesson down is not the same as building a guard against it. The third time, I built the
+guard.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 464 passed (457 before, 7 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 79 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+The derivation binding is **designed and evidenced, not built** — it changes the approved contract
+and needs sign-off. Until then the three adjustment-bearing categories still stop before the money
+and hand over, which is the approved behaviour.
+
+No Phase 10. No registry, no plan lifecycle, no sign-off, no kill switch.

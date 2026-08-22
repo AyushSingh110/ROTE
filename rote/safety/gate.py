@@ -15,6 +15,8 @@ from rote.contracts.trajectory import GateVerdict
 from rote.observability.logging import get_logger
 from rote.safety.ledger import Ledger
 
+IDEMPOTENCY_ARG = "idempotency_key"
+
 _logger = get_logger("rote.safety.gate")
 
 
@@ -56,7 +58,9 @@ class PolicyGate:
         if rule is None:
             return ()
         return tuple(
-            spec for spec in self._adapters.available_tools() if spec.name in rule.allowed_tools
+            _without_idempotency_argument(spec)
+            for spec in self._adapters.available_tools()
+            if spec.name in rule.allowed_tools
         )
 
     def _execute(
@@ -73,8 +77,10 @@ class PolicyGate:
             self._record_verdict(context, dry_run, name, GateVerdict.PERMIT, "read permitted")
             return self._adapters.invoke(name, arguments)
 
-        key = self._require_idempotency_key(context, dry_run, name, arguments)
+        self._reject_caller_supplied_key(context, dry_run, name, arguments)
         self._check_amount(context, dry_run, name, rule, arguments)
+        key = derive_idempotency_key(context.task_id, name, arguments)
+        arguments[IDEMPOTENCY_ARG] = key
         fingerprint = canonical_hash({"tool": name, "arguments": arguments})
         replay = self._replay(context, dry_run, name, key, fingerprint)
         if replay is not None:
@@ -113,17 +119,18 @@ class PolicyGate:
         if name not in rule.allowed_tools:
             raise self._refuse(context, dry_run, name, "tool is not allowlisted for this category")
 
-    def _require_idempotency_key(
+    # the key is the gate's to compute: a caller that picks its own could force a replay
+    def _reject_caller_supplied_key(
         self,
         context: PolicyContext,
         dry_run: bool,
         name: str,
         arguments: dict[str, Any],
-    ) -> str:
-        key = arguments.get("idempotency_key")
-        if not isinstance(key, str) or not key:
-            raise self._refuse(context, dry_run, name, "a mutating call needs an idempotency key")
-        return key
+    ) -> None:
+        if IDEMPOTENCY_ARG in arguments:
+            raise self._refuse(
+                context, dry_run, name, "the gate derives the idempotency key, callers may not"
+            )
 
     def _check_amount(
         self,
@@ -256,6 +263,24 @@ class GatedToolbox:
 
     def invoke(self, name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         return self._gate._execute(self._context, self._dry_run, name, payload)
+
+
+def derive_idempotency_key(task_id: str, tool: str, arguments: dict[str, Any]) -> str:
+    without_key = {k: v for k, v in arguments.items() if k != IDEMPOTENCY_ARG}
+    digest = canonical_hash({"task_id": task_id, "tool": tool, "arguments": without_key})
+    return f"{task_id}:{tool}:{digest[:16]}"
+
+
+# the key is not the agent's business, so it is not in the interface the agent is shown
+def _without_idempotency_argument(spec: ToolSpec) -> ToolSpec:
+    parameters = dict(spec.parameters)
+    properties = parameters.get("properties")
+    if isinstance(properties, dict) and IDEMPOTENCY_ARG in properties:
+        parameters["properties"] = {k: v for k, v in properties.items() if k != IDEMPOTENCY_ARG}
+    required = parameters.get("required")
+    if isinstance(required, list):
+        parameters["required"] = [name for name in required if name != IDEMPOTENCY_ARG]
+    return spec.model_copy(update={"parameters": parameters})
 
 
 def _as_currency(value: object) -> Currency | None:
