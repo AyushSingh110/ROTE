@@ -2242,3 +2242,147 @@ the world; a plan being *permitted* to run and a plan *running* are still two se
 only the first is built.
 
 **Standing caveat unchanged:** every number above carries `research grade: False`.
+
+---
+
+## 2026-08-23 — Session 14: Phase 11, the compiled path actually runs
+
+### What this phase is
+
+Every phase so far built something *about* a plan — recording it, compiling it, validating it,
+permitting it. This one **runs** it.
+
+The executor is small and deliberately dull: walk the steps, work out each argument, call the tool,
+keep the result, move on. No language model anywhere in it. Same input, same sequence, every time.
+
+### The measured result — the headline of the whole project
+
+```text
+exceptions run on the compiled path : 163   (the holdout, never seen during compilation)
+outcomes                            : {resolved: 163}
+checker verdicts                    : {pass: 163}
+LLM calls made by the compiled path : 0
+
+CONSISTENCY — 20 identical runs, a fresh world each time
+  duplicate_entry        distinct outcome hashes over 20 runs: 1
+  fee_mismatch           distinct outcome hashes over 20 runs: 1
+  fx_rounding            distinct outcome hashes over 20 runs: 1
+  partial_payment        distinct outcome hashes over 20 runs: 1
+  timing_cutoff          distinct outcome hashes over 20 runs: 1
+  transposed_reference   distinct outcome hashes over 20 runs: 1
+```
+
+**One distinct outcome for twenty identical runs. Not "usually the same". One.**
+
+That is the sentence the project was built to be able to say, and it is now a measurement rather
+than a hope. And the second line matters just as much: the compiled path is **as correct as the
+agent that taught it** — 163 out of 163 pass the code-only checker — while making zero model calls.
+
+### What an "outcome hash" is, and why it is defined once
+
+To compare two runs you have to turn each into a single value and compare those. The outcome hash
+is the fingerprint of what a run *did*: the ordered list of tools it called with their arguments,
+plus how it ended.
+
+Two decisions about it that matter:
+
+- **It is defined in exactly one place.** If two parts of the system computed it slightly
+  differently, the consistency claim would be meaningless.
+- **It does not include which plan produced it.** That is deliberate: it lets the same measurement
+  compare the compiled path against the live agent later, which is the accuracy comparison the
+  evaluation plan needs. The hash describes *what happened*, not *who did it*.
+
+### Quarantine: the amendment made real
+
+The approved amendment says a tool result is **not** state until it has been checked. The executor
+now works in two phases:
+
+```text
+call the tool -> hold the result aside -> check it -> passed? commit it. failed? hand over.
+```
+
+The Guard that does the checking is next session's work. So the executor takes the checker as
+something handed to it, and the default one accepts everything — clearly named `AcceptEveryResult`
+so nobody mistakes it for a real check.
+
+That sounds like it postpones the important part, but it does not, and this is the bit I am pleased
+with: **the quarantine rule is fully testable today** by handing the executor a checker that
+deliberately rejects. The tests prove that when a result is rejected:
+
+- it is never committed,
+- the step that would have used it never runs,
+- the handed-over state contains only the results that *were* accepted,
+- and the rejected result travels separately, in a field named `untrusted_result`.
+
+That last one is the whole point. A tool result that looks wrong is exactly the thing an attacker
+would use to steer the rest of the run. It never becomes state, and when it is passed to a human or
+the live agent it is labelled as what it is.
+
+### The invariants, and how each is held
+
+| Invariant | How |
+|---|---|
+| Only validated **and** activated plans run | Any other status raises. So does a missing or failing validation report. Five tests, one per status. |
+| Every call goes through the policy gate | The executor only ever holds a toolbox handle. It has no way to reach an adapter, and the import rules forbid it. |
+| Idempotency stays the gate's | A test asserts the executor never puts a key in any call. It cannot: the compiler never binds one. |
+| No model in the compiled path | A test parses every file in the runtime package and fails on any model library import. |
+| `UNKNOWN` is never success | Any failure — refusal, cap breach, tool error, unresolved argument — returns *escalated*. There is no path that returns resolved after something went wrong. |
+
+### An architecture problem I created and then fixed
+
+While wiring the executor I needed two things the compiler already had: the formula registry, and
+the code that reads a field out of a nested record by path. So I imported them from the compiler.
+
+Everything worked. The tests passed. And it was wrong.
+
+The architecture says the runtime does not depend on the compiler, and for a good reason: the
+compiler is an offline batch job that reads recordings, and the runtime is the live path. Tying the
+live path to the batch job means you cannot deploy or reason about them separately.
+
+The fix was not to copy the code. It was to notice **where those two things actually belong**. The
+formula registry is not a compiler detail — it is a *shared agreement*. A plan that says
+`difference` only means anything if the compiler that wrote it and the executor that runs it agree
+on what `difference` is. That makes it a contract, in exactly the way the fingerprint function is a
+contract.
+
+So both moved into the contracts package, and I added a rule to the import checker so the mistake
+cannot be made again silently:
+
+```text
+runtime does not depend on the offline compiler   KEPT
+```
+
+*What I should have noticed sooner:* the moment I typed `from rote.compiler import ...` inside a
+runtime module, that was the signal. Convenience imports across a boundary are how layered designs
+quietly stop being layered. The checker did not catch it because I had never written the rule —
+**a boundary nobody wrote down is not a boundary.**
+
+### An honest limit on the headline number
+
+The consistency result says: *given the right plan, execution is perfectly repeatable and correct.*
+
+It does **not** yet say anything about picking the right plan. There is no classifier and no router
+yet, so in this measurement I handed each exception straight to the plan for its true category. The
+deterministic resolution rate — the real headline metric — needs the classifier, and that is
+Phase 13.
+
+So the fair statement today is: **the mechanism is deterministic; the routing is untested.** And the
+standing caveat has not moved either — these trajectories came from the offline stand-in, so this
+demonstrates the machinery, not reconciliation.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 565 passed (530 before, 35 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 90 source files |
+| import-linter | 7 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**The Guard.** The executor has the shape for it and the tests prove the shape holds, but the thing
+that decides whether a result looks normal is Phase 12.
+
+No classifier, no router, no handover to the live agent. When the executor escalates it returns a
+serialisable handover package and stops — nothing yet picks that package up. That is Phase 13.

@@ -4,8 +4,8 @@ from collections.abc import Sequence
 from itertools import permutations
 from typing import Any, NamedTuple
 
-from rote.compiler.derivations import DERIVATIONS, SEARCH_ORDER
-from rote.compiler.paths import enumerate_paths, rank_path
+from rote.contracts.derivations import DERIVATIONS, SEARCH_ORDER
+from rote.contracts.paths import enumerate_paths, rank_path
 from rote.contracts.plan import BindingKind, DerivationCandidate, DerivationOperand
 
 MAX_OPERANDS = 24

@@ -664,7 +664,56 @@ override flag; every transition writes a ledger entry naming the actor; the kill
 
 **Measurable result:** lifecycle transitions reconstructable from the ledger alone.
 
-### Phase 11 — Plan Executor · `TODO`
+### Phase 11 — Deterministic Plan Executor · `DONE` (2026-08-23)
+
+**Prototype defaults confirmed:** 20 agreeing shadow runs is a configurable threshold;
+`human:` is a prototype identity convention with no authentication built.
+
+**Measured result — the project's headline claim, now a measurement.**
+
+```text
+exceptions run on the compiled path : 163   (the holdout, never seen during compilation)
+outcomes                            : {resolved: 163}
+checker verdicts                    : {pass: 163}
+LLM calls made by the compiled path : 0
+
+CONSISTENCY — 20 identical runs, a fresh world each time
+  all six categories: 1 distinct outcome hash over 20 runs
+```
+
+**One distinct outcome for twenty identical runs — not "usually the same", one.** And the compiled
+path is **as correct as the agent that taught it**: 163/163 pass the code-only checker with zero
+model calls.
+
+565 tests passed (35 new) · ruff clean · `mypy --strict` clean over 90 files · import-linter 7/7.
+
+**Honest limit on that number.** It says *given the right plan, execution is perfectly repeatable
+and correct*. It says nothing yet about **picking** the right plan — there is no classifier or
+router, so each exception was handed straight to the plan for its true category. The deterministic
+resolution rate needs Phase 13. **The mechanism is deterministic; the routing is untested.**
+
+**Decisions.** (a) `outcome_hash` is defined **once**, in `contracts/execution.py`, and deliberately
+**excludes** the plan identity so the same measurement can later compare compiled path against live
+agent (metric §I.6). (b) Amendment A1's quarantine is real: call → hold aside → inspect → commit or
+hand over. The Guard is Phase 12, so the inspector is injected and the default `AcceptEveryResult`
+is named so nobody mistakes it for a check — **yet the quarantine rule is fully testable today** by
+injecting a rejecting inspector, and the tests prove a rejected result is never committed, the
+dependent step never runs, and the rejected value travels separately in `untrusted_result`.
+(c) Any failure — refusal, cap breach, tool error, unresolved argument — returns *escalated*; there
+is no path that returns resolved after something went wrong.
+
+**Architecture conformance fix.** Wiring the executor, I imported the formula registry and path
+resolver from `rote.compiler` — everything worked, and it was wrong: §G says runtime does not depend
+on the offline compiler. The fix was not to copy but to notice where those belong. A plan saying
+`difference` means nothing unless the compiler that wrote it and the executor that runs it agree
+what `difference` is — that makes it a **contract**, exactly like `fingerprint.py`. Both moved to
+`rote/contracts/`, and a **seventh import-linter contract** now forbids `runtime → compiler`.
+*A boundary nobody wrote down is not a boundary.*
+
+**Deliberately not done.** The Guard (Phase 12). No classifier, router, or handover consumer — when
+the executor escalates it returns a serialisable handover package and stops; nothing picks it up yet
+(Phase 13). Standing caveat: `research grade: False`.
+
 
 Amendment A1 applies: two-phase state, quarantine then commit.
 

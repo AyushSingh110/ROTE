@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from rote.compiler.paths import enumerate_paths
 from rote.contracts.fingerprint import structural_fingerprint
+from rote.contracts.paths import enumerate_paths
 from rote.contracts.plan import StepExpectation
 
 IQR_NUMERATOR = 3

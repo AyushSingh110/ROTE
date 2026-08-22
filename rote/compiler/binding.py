@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, NamedTuple
 
 from rote.compiler.derivation_search import search_derivations
-from rote.compiler.paths import enumerate_paths, rank_path
+from rote.contracts.paths import enumerate_paths, rank_path
 from rote.contracts.plan import ArgBinding, BindingKind
 
 

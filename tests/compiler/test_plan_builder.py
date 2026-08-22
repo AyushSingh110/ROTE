@@ -3,9 +3,9 @@ from collections.abc import Sequence
 import pytest
 
 from rote.compiler.builder import COMPILER_VERSION, build_plan
-from rote.compiler.paths import enumerate_paths
 from rote.contracts.common import Currency, Domain, ExceptionCategory
 from rote.contracts.errors import CompilerError
+from rote.contracts.paths import enumerate_paths
 from rote.contracts.plan import (
     BindingKind,
     Plan,

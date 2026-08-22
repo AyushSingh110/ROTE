@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from rote.compiler.derivations import apply_derivation
-from rote.compiler.paths import resolve_path
 from rote.contracts.canonical import canonical_hash
+from rote.contracts.derivations import apply_derivation
 from rote.contracts.errors import CompilerError
+from rote.contracts.paths import resolve_path
 from rote.contracts.plan import ArgBinding, BindingKind, Plan, ReplayOutcome, ValidationReport
 from rote.contracts.trajectory import Trajectory
 

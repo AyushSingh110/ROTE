@@ -5,9 +5,9 @@ from collections.abc import Sequence
 import pytest
 
 from rote.compiler.builder import build_plan
-from rote.compiler.derivations import DERIVATIONS, apply_derivation
 from rote.compiler.replay import replay_plan, validate_plan
 from rote.contracts.common import Currency, Domain, ExceptionCategory
+from rote.contracts.derivations import DERIVATIONS, apply_derivation
 from rote.contracts.errors import CompilerError
 from rote.contracts.plan import BindingKind, Plan, PolicyRequirement
 from rote.contracts.trajectory import Trajectory
