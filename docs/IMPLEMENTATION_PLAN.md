@@ -200,7 +200,40 @@ in the prototype.
 
 **Measurable result:** `verify()` names the exact sequence number of a tampered entry.
 
-### Phase 3 — Synthetic generator + tool layer stubs · `TODO`
+### Phase 3 — Synthetic environment + deterministic mock tools · `DONE` (2026-08-22)
+
+**Measured result — achieved.**
+
+```text
+generator: 500 exceptions, 1 distinct digest over 5 runs (target 1); a different seed differs
+category mix: fee 24.8% · timing 21.8% · transposed 17.8% · fx 15.0% · partial 12.0% · dup 8.6%
+untrusted: 2 blocks per exception; 13.6% carry an injection; 0/500 markers reach structured facts
+tools: 9 read-only tools x 40 calls across 2 independently built worlds -> 1 distinct result each
+```
+
+166 tests passed (61 new) · ruff clean · `mypy --strict` clean over 36 files · import-linter 5/5.
+
+**Decisions.** (a) Ground truth is end state only — enforced by a test asserting no tool name
+appears anywhere in the serialised ground truth, and another asserting no procedure-shaped field
+exists. (b) The tool set is a deliberate **superset**: 12 tools, of which 3 are working decoys, so
+a recorded tool choice is a real choice (Risk R2). (c) Every case draws the same eight random
+values regardless of category, so the random stream never depends on the category schedule.
+(d) FX rates are integer millionths and money is minor units — no floats anywhere, per Phase 1.
+(e) Idempotency lives in the world: same key + same args replays; same key + different args raises
+rather than silently overwriting. (f) A test parses every domain module's imports and fails on any
+network, model, framework, clustering or higher-layer import — "offline with no agent or compiler
+logic" is checked, not promised.
+
+**Contract refinement found while implementing.** `mark_settlement_matched` gained a **required**
+`status` argument (`matched` | `partially_settled`). Without it the `PARTIALLY_SETTLED` end state
+that ground truth demands was unreachable by any tool, so Phase 4 would have failed every partial
+payment. No default, because a default would let a real decision be skipped by accident. This
+argument is expected to compile to a `FROM_RULE` decision table in Phase 9.
+
+**Deferred out of this phase.** The divergence-labelled generator was listed here, but injecting
+corrupted tool results is only meaningful once the Guard exists to catch them. Moved to Phase 8/14
+where it is consumed.
+
 
 Six reconciliation categories, each carrying code-only ground truth. Generator knows the correct
 **end state** only — it never encodes a tool sequence (Risk R2).

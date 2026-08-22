@@ -95,3 +95,16 @@ name = "compiler cannot reach into a running system"
 type = "forbidden"
 source_modules = ["rote.compiler"]
 forbidden_modules = ["rote.runtime", "rote.agent", "rote.service"]
+
+[[tool.importlinter.contracts]]
+name = "domain never reaches back into higher layers"
+type = "forbidden"
+source_modules = ["rote.domain"]
+forbidden_modules = [
+    "rote.runtime",
+    "rote.agent",
+    "rote.compiler",
+    "rote.recorder",
+    "rote.eval",
+    "rote.service",
+]
