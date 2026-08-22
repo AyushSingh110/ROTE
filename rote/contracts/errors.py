@@ -38,3 +38,10 @@ class AgentProtocolError(AgentError): ...
 
 
 class RecorderError(RoteError): ...
+
+
+class PolicyError(RoteError):
+    def __init__(self, verdict: object, reason: str) -> None:
+        super().__init__(reason)
+        self.verdict = verdict
+        self.reason = reason

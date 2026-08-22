@@ -1245,3 +1245,195 @@ No policy gate, no guard, no compiler, no classifier. No Postgres — the enviro
 it a configuration change rather than a code change, but only SQLite has actually been run. No
 migrations tool; the single table is created if missing, which is enough for a prototype and
 would not be enough in production.
+
+---
+
+## 2026-08-22 — Session 8: Phase 7, the policy gate
+
+### What we built and why
+
+**The policy gate** — the one door every tool call must pass through, and the component that
+decides what the system is *allowed* to do, as opposed to what it *wants* to do.
+
+This is the most important safety component in Rote. Everything else — the compiler, the guard,
+the recordings — is about making the system predictable. The gate is about making it **bounded**.
+Those are different promises. A predictable system does the same thing every time. A bounded
+system cannot do certain things at all, no matter what it decides.
+
+**Also built:** structured JSON logging with a correlation id, kept deliberately small — one file,
+about thirty lines. Every gate decision is logged with the id of the exception it belongs to, so a
+single case can be traced through the logs end to end.
+
+### How the gate stops things being bypassed
+
+The trick is that the gate **is** the toolbox. The agent already talked to something called a
+`Toolbox` — it asks what tools exist, and it calls one. The gate satisfies that same shape, so we
+slid it underneath and the agent did not need a single change to *how* it works.
+
+That gives three protections at once:
+
+1. **The agent never holds a tool.** It holds a promise that it can ask. The gate holds the real
+   thing.
+2. **The agent cannot see a tool it may not use.** The gate filters the list before showing it. A
+   forbidden tool is not refused — it is *invisible*. You cannot ask for what you were never
+   shown.
+3. **A refusal never reaches the tool.** Proven by counting: with a tight limit, the gate said no
+   171 times and the tools were called exactly 171 fewer times.
+
+### INTENT, OUTCOME, and the gap between them
+
+Every money-moving call writes three possible marks in the ledger:
+
+- **INTENT** — written *before* the instruction goes out. "I am about to do this."
+- **OUTCOME** — written after it comes back. "Here is what happened."
+- **UNKNOWN** — written if something breaks *between* the two.
+
+UNKNOWN is the important one. If the program dies after sending a payment instruction but before
+hearing back, nobody knows whether the money moved. The tempting thing is to retry. **Retrying is
+how you pay somebody twice.**
+
+So an UNKNOWN action is frozen. Ask again with the same key and the gate refuses and escalates to
+a human. There is a test that fails three times in a row against a broken tool and then checks the
+world: **zero adjustments posted**. Not one, not three. Zero.
+
+### The defect the measurement found
+
+This is the most valuable thing that happened today, and it was **not** something a test I had
+planned would have caught.
+
+I ran 500 exceptions with a deliberately tight money limit, expecting to see the gate refuse some
+actions. It did — 171 refusals. But look at what the checker then said about those cases:
+
+```text
+BEFORE THE FIX
+  step verdicts   : {'escalate': 171, 'permit': 1479}
+  outcomes        : {'resolved': 500}
+  checker verdicts: {'fail': 171, 'pass': 329}
+```
+
+**171 failures.** The gate had correctly blocked 171 adjustments — and the agent had then shrugged,
+treated the refusal as an ordinary tool error, and gone on to close the settlement anyway. The
+result was a record marked finished with the correction missing. A wrong answer, confidently
+delivered.
+
+The gate was not broken. The gate did its job perfectly. **The agent was routing around it.**
+
+And that defeats the entire point. A system where the agent can be told "no" and simply continue
+is not bounded. It is a system with a suggestion box.
+
+The fix is four lines: when the gate escalates, the run stops. Here is the same campaign after:
+
+```text
+AFTER THE FIX
+  step verdicts   : {'escalate': 171, 'permit': 1308}
+  outcomes        : {'escalated': 171, 'resolved': 329}
+  checker verdicts: {'pass': 329, 'undetermined': 171}
+```
+
+**171 wrong answers became 171 honest hand-offs.**
+
+That single line is the whole thesis of this project in miniature. The system did not get better at
+resolving exceptions — it resolved exactly the same 329. What changed is that it stopped pretending
+about the other 171. It now says "I was not allowed to finish this, a human should look" instead of
+"done" while quietly leaving money unaccounted for.
+
+*What I should have noticed sooner:* I built the gate and tested the gate. I did not test what the
+**agent does when the gate says no**. Testing a guard in isolation proves the guard works. It does
+not prove the system is guarded. **The interesting bugs live at the seam between two components
+that were each tested alone.**
+
+### Amendment A2, made concrete
+
+The approved amendment said the live agent gets no automatic privilege over a compiled plan. That
+is now a real rule with a real test: both paths start from the identical limits, and neither may
+exceed them. There is no code path where "it was the agent" grants more authority.
+
+The per-category limits demonstrate the other principle from the security model — **categories
+that lean hardest on merchant free text carry the lowest limits**. If an attacker's note can nudge
+the classifier toward a different category, the worst they can reach is a category that was
+deliberately given less rope. And a fee plan cannot void a bank line at all, whatever it decides.
+
+### The measured result
+
+```text
+DEFAULT POLICY, 500 exceptions
+  recorded steps          : 1650
+  gate verdicts in ledger : 1650      <- one verdict per step, permit and refuse alike
+  adapter calls made      : 1650
+  tool calls that bypassed:    0
+  step verdicts           : {'permit': 1650}
+  INTENT == OUTCOME       : True (802 each)
+  UNKNOWN left behind     : 0
+  checker verdicts        : {'pass': 500}    <- the gate costs no resolution quality
+  ledger chain valid      : True (3,254 entries)
+
+STRUCTURED LOGGING
+  gate decisions logged     : 3,300
+  all carry a correlation id: True
+```
+
+The line that matters most is **0 bypasses**: the number of adapter calls exactly equals the number
+of recorded gate verdicts. Nothing reached a tool without a decision being written down first.
+
+### Design decisions worth remembering
+
+**1. The gate is a wrapper, not a checkpoint.**
+A checkpoint is something you are supposed to walk through. A wrapper is something you cannot walk
+around. The gate holds the adapters; nobody else has a reference to them.
+
+**2. Every decision is recorded, including the permissions.**
+It would be cheaper to log only refusals. But a gate that only records when it says no cannot prove
+it was ever consulted. Recording the yeses is what makes "0 bypasses" a measurable fact instead of
+a claim.
+
+**3. `UNGATED` finally means something true.**
+Last session I added that value so steps could say out loud that no gate stood in their path. Now
+every step in a gated run says `permit` instead, and a test asserts `ungated` never appears. The
+placeholder became evidence.
+
+**4. Any failure after INTENT is treated as UNKNOWN.**
+Even a tidy "record not found" error. The gate cannot tell, from outside, whether the instruction
+had already taken effect. Being conservative sends a few extra cases to a human; being optimistic
+double-pays. In production an adapter would report whether the call was actually issued, and this
+would narrow.
+
+**5. Secrets are scrubbed by the logger, not by the caller.**
+Any field whose name contains key, token, password, secret, authorization or credential is replaced
+before it is written. Trusting every future call site to remember is not a plan.
+
+### The errors we hit today
+
+**Error 1 — my test ran out of clock.** I gave a test a fixed list of four timestamps, not
+realising the gate reads the clock more often than that (once per ledger entry). It died with
+`IndexError: pop from empty list`. *Cause:* I guessed how many times the code would ask for the
+time instead of giving it a clock that always answers. *Fix:* a small settable clock the test moves
+forward deliberately. *Lesson:* a fake should answer any number of calls; if a test depends on how
+many times something is called, it is testing the wrong thing.
+
+**Error 2 — a text replacement that silently did nothing.** I changed the return type of a
+function by searching for its old signature — but the formatter had already reflowed that line onto
+one line, so my search matched nothing and the change was skipped. Everything still ran; only the
+type checker noticed, reporting five confusing errors that all traced back to one missing edit.
+*Lesson:* when an edit "succeeds" but the type checker complains about the thing you just changed,
+suspect the edit never landed.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 357 passed (306 before, 51 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 64 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**The ingestion / redaction boundary** is still open. The plan listed it under this phase, but it
+only becomes load-bearing when a hosted model is wired in, and there is no model yet. Proposed for
+Phase 13 alongside the classifier, which is the component it actually protects.
+
+**At-most-once survives a crash only within one process.** The gate remembers completed keys in
+memory. The ledger holds the durable record, so rebuilding that memory from the ledger on startup
+is the production answer. Not done.
+
+No compiler, no guard, no classifier, no router.

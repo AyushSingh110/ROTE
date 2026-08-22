@@ -18,6 +18,9 @@ class ToolSpec(BaseModel):
 # so neither can reach an adapter directly and neither can see a tool the boundary withheld
 @runtime_checkable
 class Toolbox(Protocol):
+    # a boundary states whether it enforces policy, so a recorded verdict is never a guess
+    enforces_policy: bool
+
     def available_tools(self) -> tuple[ToolSpec, ...]: ...
 
     def invoke(self, name: str, payload: Mapping[str, Any]) -> dict[str, Any]: ...

@@ -108,3 +108,19 @@ forbidden_modules = [
     "rote.eval",
     "rote.service",
 ]
+
+[[tool.importlinter.contracts]]
+name = "observability is a leaf like contracts"
+type = "forbidden"
+source_modules = ["rote.observability"]
+forbidden_modules = [
+    "rote.contracts",
+    "rote.safety",
+    "rote.domain",
+    "rote.recorder",
+    "rote.compiler",
+    "rote.runtime",
+    "rote.agent",
+    "rote.eval",
+    "rote.service",
+]

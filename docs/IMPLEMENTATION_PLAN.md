@@ -401,7 +401,63 @@ a caller-supplied one; `agent_model_id` / `prompt_template_id` / `untrusted_text
 
 **Measurable result:** 100 trajectories recorded and round-tripped through the store unchanged.
 
-### Phase 7 — Policy Gate + ingestion boundary · `TODO`
+### Phase 7 — Policy Gate + tool-boundary enforcement · `DONE` (2026-08-22)
+
+**Measured result — achieved.** 500 exceptions, offline:
+
+```text
+DEFAULT POLICY
+  recorded steps 1650 · gate verdicts in ledger 1650 · adapter calls 1650 · BYPASSES 0
+  step verdicts {permit: 1650} · INTENT == OUTCOME (802 each) · UNKNOWN left behind 0
+  checker verdicts {pass: 500}  <- the gate costs no resolution quality
+  ledger chain valid, 3,254 entries · 3,300 JSON log events, all with a correlation id
+```
+
+357 tests passed (51 new) · ruff clean · `mypy --strict` clean over 64 files · import-linter 6/6.
+
+**A real defect the measurement found — and the fix.** With a deliberately tight cap the gate
+refused 171 over-cap adjustments correctly, but the agent absorbed each refusal as an ordinary tool
+error and closed the settlement anyway:
+
+```text
+BEFORE  step verdicts {escalate: 171, permit: 1479} · outcomes {resolved: 500}
+        checker verdicts {fail: 171, pass: 329}      <- 171 confidently wrong answers
+AFTER   step verdicts {escalate: 171, permit: 1308} · outcomes {escalated: 171, resolved: 329}
+        checker verdicts {pass: 329, undetermined: 171}  <- 171 honest hand-offs
+```
+
+The gate was never broken; the **agent was routing around it**, and a system that can be told "no"
+and continue is not bounded. Four lines in the loop now end the run on an `ESCALATE` verdict. The
+system resolves exactly the same 329 cases — it simply stopped pretending about the other 171.
+*Lesson recorded:* the gate was tested, and the agent was tested, but not the seam between them.
+
+**Decisions.** (a) The gate **is** the `Toolbox` the agent already talked to, so nothing above it
+changed shape; it holds the adapters, and a forbidden tool is filtered out of `available_tools()`
+so it is invisible rather than merely refused. (b) Every decision is recorded, permits included —
+a gate that logs only refusals cannot prove it was consulted, and "0 bypasses" is measurable only
+because the yeses are recorded too. (c) Any failure after `INTENT` is treated as `UNKNOWN`, even a
+tidy not-found error: the gate cannot tell from outside whether the instruction landed, and being
+optimistic double-pays. (d) `GateVerdict.UNGATED` now never appears in a gated run, asserted by
+test — the Phase 5 placeholder became evidence. (e) Secrets are scrubbed by the log processor, not
+by call sites.
+
+**Amendment A2 made concrete.** Both execution paths start from identical caps and neither may
+exceed them; there is no code path where "it was the live agent" grants more authority. Per-category
+rules implement §F/T2: categories leaning hardest on merchant free text carry the **lowest** caps, so
+a nudged label reaches less rope, and a fee plan cannot void a bank line at all.
+
+**Logging kept minimal as approved:** one ~30-line module, JSON renderer, correlation id on every
+event, secret scrubbing. `rote.observability` is enforced as a leaf by a sixth import-linter
+contract.
+
+**Still open from this phase's original scope.** The **ingestion / redaction boundary** was listed
+here but only becomes load-bearing when a hosted model is wired in, and there is no model yet.
+Proposed for Phase 13 alongside the classifier — the component it actually protects.
+
+**Known limitation.** At-most-once survives a crash only within one process: the gate remembers
+completed idempotency keys in memory. The ledger holds the durable record, so rebuilding that map
+from the ledger at startup is the production answer. Not done.
+
 
 Amendment A2 applies: caps by `(path, category)`, no implicit live-agent privilege.
 

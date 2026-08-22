@@ -11,9 +11,9 @@ from rote.contracts.agent import (
     Observation,
 )
 from rote.contracts.common import Domain, UntrustedText
-from rote.contracts.errors import AgentProtocolError, RoteError
+from rote.contracts.errors import AgentProtocolError, PolicyError, RoteError
 from rote.contracts.tools import Toolbox
-from rote.contracts.trajectory import Trajectory
+from rote.contracts.trajectory import GateVerdict, Trajectory
 from rote.recorder.recorder import TrajectoryRecorder
 
 
@@ -67,8 +67,11 @@ def run_agent(
         except AgentProtocolError:
             return recorder.finish(outcome="failed")
 
-        observation = _invoke(toolbox, recorder, decision)
+        observation, verdict = _invoke(toolbox, recorder, decision)
         observations.append(observation)
+        # a bounded agent may not route around a refusal, so an escalation ends the run
+        if verdict is GateVerdict.ESCALATE:
+            return recorder.finish(outcome="escalated")
         if observation.error is not None:
             errors += 1
             if errors >= budget.max_tool_errors:
@@ -82,17 +85,26 @@ def ensure_tool_is_offered(tool: str | None, offered: tuple[str, ...]) -> None:
         raise AgentProtocolError(f"model asked for tool {tool!r}, which was never offered")
 
 
-def _invoke(toolbox: Toolbox, recorder: TrajectoryRecorder, decision: AgentDecision) -> Observation:
+def _invoke(
+    toolbox: Toolbox, recorder: TrajectoryRecorder, decision: AgentDecision
+) -> tuple[Observation, GateVerdict]:
     tool = decision.tool
     arguments = decision.arguments or {}
     assert tool is not None
+    permitted = GateVerdict.PERMIT if toolbox.enforces_policy else GateVerdict.UNGATED
     started = time.monotonic()
     try:
         result: dict[str, Any] | None = toolbox.invoke(tool, arguments)
         failure: tuple[str, str] | None = None
+        verdict = permitted
+    except PolicyError as error:
+        result = None
+        failure = (type(error).__name__, str(error))
+        verdict = error.verdict if isinstance(error.verdict, GateVerdict) else permitted
     except RoteError as error:
         result = None
         failure = (type(error).__name__, str(error))
+        verdict = permitted
     latency_ms = int((time.monotonic() - started) * 1000)
 
     recorder.record_step(
@@ -100,14 +112,18 @@ def _invoke(toolbox: Toolbox, recorder: TrajectoryRecorder, decision: AgentDecis
         args=arguments,
         result=result,
         error=failure,
+        gate_verdict=verdict,
         idempotency_key=_idempotency_key(arguments),
         latency_ms=latency_ms,
     )
-    return Observation(
-        tool=tool,
-        arguments=arguments,
-        result=result,
-        error=None if failure is None else failure[1],
+    return (
+        Observation(
+            tool=tool,
+            arguments=arguments,
+            result=result,
+            error=None if failure is None else failure[1],
+        ),
+        verdict,
     )
 
 

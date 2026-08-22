@@ -43,6 +43,8 @@ MERCHANT_SEGMENTS: tuple[str, ...] = ("small_business", "mid_market", "enterpris
 
 
 class ReconciliationTools:
+    enforces_policy = False
+
     def __init__(self, world: ReconciliationWorld) -> None:
         self._world = world
         self._handlers: dict[str, Callable[[Any], BaseModel]] = {
