@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
+from rote.compiler.derivation_search import search_derivations
 from rote.compiler.paths import enumerate_paths, rank_path
 from rote.contracts.plan import ArgBinding, BindingKind
 
@@ -49,6 +50,17 @@ def infer_binding(
                 evidence_run_count=len(observed),
                 alternative_paths=from_step.alternatives,
             )
+
+    # last resort before giving up: a named formula over typed integer fields, never a model
+    derivations = search_derivations(observed, task_inputs, prior_results)
+    if derivations:
+        return ArgBinding(
+            arg_name=arg_name,
+            kind=BindingKind.FROM_DERIVATION,
+            derivation=derivations[0],
+            evidence_run_count=len(observed),
+            alternative_derivations=derivations[1:],
+        )
     return None
 
 

@@ -1924,3 +1924,150 @@ and needs sign-off. Until then the three adjustment-bearing categories still sto
 and hand over, which is the approved behaviour.
 
 No Phase 10. No registry, no plan lifecycle, no sign-off, no kill switch.
+
+---
+
+## 2026-08-22 — Session 12: the derivation binding, and the first plans that reach the money
+
+### What changed
+
+Last session ended with every category compiling partway and then stopping, blocked by one
+argument: **the amount of the correction**. I had investigated it and found it was not a choice
+between options but a calculation — a subtraction of two fields already on the exception.
+
+This session built that: a **fourth way to bind an argument**.
+
+### The four ways an argument can now be filled
+
+1. **A constant** — it never changed in any run.
+2. **A field of the incoming exception** — it always equalled some field.
+3. **A field of an earlier result** — it always equalled something a previous step returned.
+4. **A named formula** — none of the above, but a hand-written calculation over whole-number
+   fields reproduces it exactly in every run.
+
+They are tried in that order, cheapest first. A formula is the last thing tried before giving up,
+and there is a test asserting that a value which *could* have been a plain field never gets bound
+as a formula instead.
+
+### The rule that keeps formulas safe
+
+**A plan references a formula by name. It can never contain one.**
+
+The formulas live in a small closed list in the source code — four of them, each an ordinary Python
+function I wrote and can point at. `difference`, `sum`, `scaled_difference`, `scaled_sum`. A plan
+stores a *name* and which fields to feed it. Nothing is ever built from text, nothing is evaluated,
+and adding a fifth formula is a code change with a test, not a data change.
+
+This is the same rule already agreed for invariants, and for the same reason. Text that becomes
+code, produced by a compiler that read machine-generated recordings, inside a system that moves
+money, is a hole you cannot close later. So it is never opened.
+
+There is a test that parses every file in the compiler and fails if it finds a call to `eval`,
+`exec`, or `compile` anywhere.
+
+### How the compiler finds the formula
+
+It does not guess and it does not learn. It searches, exhaustively, over a small closed space:
+
+- gather every whole-number field visible at that point — from the exception and from earlier
+  results
+- try every formula with every ordering of those fields
+- keep only combinations that reproduce the observed value in **every single run**
+
+An important efficiency detail that is also a correctness detail: it checks the *first* run before
+checking the rest. Almost every combination dies immediately, so the search stays fast — and
+because a combination must survive all runs, one coincidence cannot get through.
+
+Simplest wins. Formulas are tried in order of how many inputs they need, so a two-field subtraction
+is always preferred over a three-field one that happens to also fit.
+
+### Ambiguity is recorded, exactly as approved
+
+Several formulas often fit. For the currency case, four did. That is not a bug — it is arithmetic
+being arithmetic. `internal minus bank` fits, and so does `the record amount from step 0 minus
+bank`, because those two numbers are the same. Swapping the operands of a multiplication also fits,
+because multiplication does not care about order.
+
+So the binding now stores **the chosen formula and the runners-up**, exactly as it already stored
+alternative field paths. A coincidence that holds for ninety-three runs is precisely the thing that
+breaks quietly a year later, and the plan should say what else it could have meant.
+
+### The result
+
+Every category now compiles from start to finish.
+
+```text
+category                fit  steps  trunc   holdout  patheq  miss  validated
+duplicate_entry          32      3  False        11      11     0  PASS
+fee_mismatch             93      4  False        31      31     0  PASS
+fx_rounding              46      4  False        29      29     0  PASS
+partial_payment          39      4  False        21      21     0  PASS
+timing_cutoff            68      2  False        41      41     0  PASS
+transposed_reference     59      3  False        30      30     0  PASS
+
+binding mix : {from_derivation: 3, from_input: 27, literal: 16}
+truncations : none
+replay total: holdout 163  path-equal 163  playback misses 0
+```
+
+**Nothing truncates. 163 out of 163 unseen runs reproduce exactly.**
+
+And here is the number I find most convincing. Across all six categories there are **46 arguments**
+to fill. Forty-three of them are either a constant or a field you can point at. **Three** needed a
+formula. None needed a model.
+
+These are the three:
+
+```text
+fee_mismatch     minor_units = difference(internal_amount.minor_units, bank_amount.minor_units)
+partial_payment  minor_units = difference(internal_amount.minor_units, bank_amount.minor_units)
+fx_rounding      minor_units = scaled_difference(internal, bank, rate_micros from step 1)
+```
+
+That is the whole of the "intelligence" the compiled path needs: **one subtraction, and one
+subtraction after a currency conversion.** Everything else is copying a field or writing down a
+constant.
+
+If someone asks what the compiled plan actually *is*, that table is the answer.
+
+### What this says about the thesis
+
+The claim was that within one exception the judgement is in deciding *which kind* it is, and the
+repair afterwards is mechanical. This is the first hard evidence for the second half of that claim,
+and the evidence is stronger than I expected: the repair is not merely mechanical, it is **almost
+entirely lookup**, with three subtractions in the entire system.
+
+The honest caveat has not moved. These are recordings from the offline stand-in, so this shows the
+compiler works. It does not yet show anything about real reconciliation.
+
+### The error today
+
+Two of my own tests failed, and both were my fault in the same way. I wrote a fixture where the
+"varying" amount was `(100 + i) - (40 + i)` — which is 60, every time. The compiler correctly bound
+it as a **constant**, because it was one. Then the replay against different data missed, correctly.
+
+*What I should have noticed sooner:* I wrote a test for varying arithmetic and gave it arithmetic
+that does not vary. The compiler was right and my fixture was wrong. Worth remembering when reading
+any future result: **if a value binds as a constant when you expected a formula, check whether it
+actually varies before blaming the binder.**
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 480 passed (464 before, 16 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 82 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**No scikit-learn, and no model of any kind** — the approved decision, and the investigation showed
+a decision tree could not have done this job anyway.
+
+`FROM_RULE` and `FROM_SLOT` remain in the contract, unused. They are the right answer for a genuine
+*choice* among a few options, which has not arisen yet; every such argument so far turned out to be
+constant within its category.
+
+No Phase 10: no registry, no lifecycle, no shadow mode, no human sign-off, no kill switch. Every
+plan is still emitted as a draft, and passing validation is not the same as being allowed to run.

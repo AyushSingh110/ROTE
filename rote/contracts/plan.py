@@ -15,6 +15,7 @@ class BindingKind(StrEnum):
     LITERAL = "literal"
     FROM_INPUT = "from_input"
     FROM_STEP = "from_step"
+    FROM_DERIVATION = "from_derivation"
     FROM_RULE = "from_rule"
     FROM_SLOT = "from_slot"
 
@@ -32,6 +33,22 @@ class TruncationReason(StrEnum):
     INCONSISTENT_ARGUMENTS = "inconsistent_arguments"
 
 
+class DerivationOperand(BaseModel):
+    model_config = FROZEN
+
+    kind: Literal[BindingKind.FROM_INPUT, BindingKind.FROM_STEP]
+    json_path: str = Field(min_length=1)
+    source_step_index: int | None = None
+
+
+# a plan references a formula by name; it can never contain one, so there is nothing to evaluate
+class DerivationCandidate(BaseModel):
+    model_config = FROZEN
+
+    derivation_id: str = Field(min_length=1)
+    operands: tuple[DerivationOperand, ...]
+
+
 class ArgBinding(BaseModel):
     model_config = FROZEN
 
@@ -40,9 +57,12 @@ class ArgBinding(BaseModel):
     literal_value: Any = None
     json_path: str | None = None
     source_step_index: int | None = None
+    derivation: DerivationCandidate | None = None
     # provenance: "inferred from 241 runs at 100% agreement" is what makes a binding defensible
     evidence_run_count: int = Field(ge=1)
+    # a coincidence that held for 241 runs is exactly what breaks quietly later, so keep the rest
     alternative_paths: tuple[str, ...] = ()
+    alternative_derivations: tuple[DerivationCandidate, ...] = ()
 
 
 class StepExpectation(BaseModel):

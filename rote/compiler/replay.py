@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from rote.compiler.derivations import apply_derivation
 from rote.compiler.paths import resolve_path
 from rote.contracts.canonical import canonical_hash
 from rote.contracts.errors import CompilerError
@@ -63,7 +64,29 @@ def _resolve(
         if index is None or index >= len(committed):
             return False, None
         return resolve_path(str(binding.json_path), committed[index])
+    if binding.kind is BindingKind.FROM_DERIVATION:
+        return _resolve_derivation(binding, task_input, committed)
     raise CompilerError(f"binding kind {binding.kind} is not executable in v1")
+
+
+def _resolve_derivation(
+    binding: ArgBinding, task_input: dict[str, Any], committed: Sequence[dict[str, Any]]
+) -> tuple[bool, Any]:
+    derivation = binding.derivation
+    if derivation is None:
+        return False, None
+    values: list[int] = []
+    for operand in derivation.operands:
+        if operand.kind is BindingKind.FROM_INPUT:
+            found, value = resolve_path(operand.json_path, task_input)
+        elif operand.source_step_index is None or operand.source_step_index >= len(committed):
+            return False, None
+        else:
+            found, value = resolve_path(operand.json_path, committed[operand.source_step_index])
+        if not found or not isinstance(value, int) or isinstance(value, bool):
+            return False, None
+        values.append(value)
+    return True, apply_derivation(derivation.derivation_id, values)
 
 
 def _call_key(tool: str, arguments: dict[str, Any]) -> str:
