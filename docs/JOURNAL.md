@@ -859,3 +859,221 @@ of the project would be worthless.
 
 No agent, no recorder, no policy gate, no compiler. Phase 5 is the hand-written live agent loop
 and it has not been started.
+
+---
+
+## 2026-08-22 — Session 6: Phase 5, the live agent and trajectory recording
+
+### What we built and why
+
+Three things:
+
+1. **The live agent loop** — a hand-written `for` loop, about 90 lines. Ask the model what to do
+   next, do it, write it down, repeat until finished or out of budget.
+2. **The recorder** — turns a run into a **trajectory**: a full written record of every step.
+3. **The offline model** — a stand-in that makes decisions without any internet or API key, so
+   the whole project runs on a laptop on a train.
+
+Why the trajectory matters. Everything Rote does later is built on these recordings. The compiler
+reads them to find the repeated procedure. The guard learns from them what "normal" looks like. If
+the recording is incomplete or subtly wrong, everything downstream is wrong too. So the recording
+is not a log — it is the raw material.
+
+### No framework, on purpose
+
+The loop is plain Python. No LangGraph, no agent framework of any kind, and a test walks every file
+in the agent package and fails if one appears.
+
+The reason is simple: I have to explain every line of this project under questioning. A framework's
+internal state handling is hard to explain when someone else in the room knows it better than I do.
+The loop is short enough to read aloud.
+
+### The three walls around the agent
+
+**Wall 1 — the agent cannot reach a tool directly.**
+It is handed a `Toolbox`, which is just a promise: *"you can ask what tools exist, and you can call
+one."* In Phase 7 the policy gate becomes that toolbox, and the agent will not notice the change —
+it never had a direct route to anything. A test proves the agent package never imports a tool
+adapter.
+
+There is a second, subtler benefit. The agent can only see the tools the toolbox *offers*. When the
+gate arrives, a tool the gate does not allow simply will not appear in the list. The agent cannot
+ask for what it was never shown.
+
+**Wall 2 — the agent cannot see the answer.**
+A test reads every file in the agent package and fails if it mentions ground truth, the expected
+ending, or the test oracle from Phase 4. Another test checks the function's own signature offers no
+parameter that could smuggle the answer in.
+
+This is the difference between an agent and a cheat. The Phase 4 test oracle reads the correct
+ending and replays it. The agent has never seen it and can be wrong — and when it is, the checker
+says so.
+
+**Wall 3 — untrusted text stays in its own box.**
+The information handed to the model has two separate fields: the structured facts, and the
+merchant's free text. They are never merged into one blob. So when a real model is wired in later,
+the untrusted text has somewhere safe to go by construction rather than by remembering.
+
+### The measured result
+
+```text
+exploration = 0.0
+  trajectories recorded : 500
+  outcomes              : {'resolved': 500}
+  checker verdicts      : {'pass': 500}
+  steps per run         : min 2 / median 4 / max 4
+
+exploration = 0.35
+  trajectories recorded : 500
+  outcomes              : {'resolved': 500}
+  steps per run         : min 4 / median 6 / max 6
+
+DETERMINISM
+  same seed, same tool sequences across 500 runs: True
+```
+
+500 exceptions worked start to finish, offline, with no API key, and every run recorded, labelled
+by the Phase 4 checker, and stored.
+
+### The number I am NOT happy about, and why I am writing it down
+
+**The offline model scored 500 out of 500. That is a warning sign, not a success.**
+
+Real agents reported in this field plateau somewhere around 85–92%. A stand-in that never makes a
+mistake is not behaving like an agent. It is behaving like a procedure I wrote.
+
+Why this matters enormously for the next phase. Phase 8 asks the central research question:
+*"do successful runs of the same category actually share a stable sequence of steps?"* If I ask
+that question of trajectories produced by my own hand-written heuristic, the answer is guaranteed
+to be yes — because I wrote the heuristic, so of course it repeats itself. That would be measuring
+my own code and calling it a finding.
+
+So this is recorded as a hard rule going forward:
+
+> **A compilability result computed only from `offline-heuristic-1` trajectories is not a research
+> result.** The offline model exists to prove the machinery works. The real number needs a real
+> model, and the model-agreement experiment in the architecture (§I.8) exists precisely to prove
+> the discovered procedure belongs to the task and not to the model.
+
+Every trajectory records `agent_model_id`, so this can never be accidentally forgotten — any later
+report can be split by which model produced the runs.
+
+A useful preview did come out of it, though:
+
+```text
+TOOL SEQUENCE VARIETY
+  verified runs 500   distinct sequences 5   modal support 0.37
+```
+
+Five distinct sequences across all 500 runs, because there are six categories and each has its own
+natural shape. Support of 0.37 is the *whole-dataset* figure; the Phase 8 probe measures support
+*within a category*, where it will be far higher. That is the correct behaviour and it confirms the
+grouping question is well posed.
+
+### Two places where I could not follow the architecture sketch exactly
+
+Both are recorded here rather than made quietly.
+
+**1. `category` and `category_confidence` are allowed to be empty.**
+The architecture sketch has every trajectory carrying the exception's category. But the classifier
+is Phase 13 and does not exist yet, so a Phase 5 run genuinely has no category. Rather than invent
+one, the fields accept "nothing yet" and Phase 13 will fill them.
+
+This turned out to have a hidden benefit. Phase 8 will group runs by the **true** category from the
+dataset, not by whatever the classifier guessed. That keeps two different questions apart:
+*"is the procedure stable?"* and *"can the classifier pick the right category?"* Mixing them would
+make a bad classifier look like an unstable procedure.
+
+**2. Every step records whether a gate stood in its path, and right now the honest answer is
+`ungated`.**
+The policy gate is Phase 7. I could have left the field empty, but an empty field looks like
+nothing is wrong. Instead there is an explicit value — `ungated` — so all 1,650 steps in this run
+say out loud that no gate was involved. When Phase 7 lands, a test can simply assert that no
+`ungated` step exists any more. **A visible gap is safer than an absent one.**
+
+### The errors we hit today
+
+**Error 1 — I wrote `pytest.raises(Exception)` again.**
+
+*What broke.* `ruff` flagged it twice, in tests checking that a malformed model decision is
+rejected.
+
+*The real cause.* Same mistake as Phase 4: accepting any error at all rather than the specific one.
+
+*How we fixed it.* Changed both to expect `ValidationError`.
+
+*What I should have noticed sooner.* **This is the second session running that I have made this
+exact mistake.** The lesson from Phase 4 was written down and still did not stick. Writing it in
+the journal is not enough — the linter is what actually caught it both times, which is a good
+argument for keeping the quality gates strict rather than trusting memory.
+
+**Error 2 — the type checker caught untyped data pretending to be a number.**
+
+*What broke.* `mypy --strict` said:
+`Returning Any from function declared to return "int"`.
+
+*The real cause.* The offline model reads a fee schedule that arrives as plain JSON, so Python does
+not know `flat_fee_minor_units` is a whole number. I did arithmetic on it and claimed the answer was
+an integer without ever checking.
+
+*How we fixed it.* Converted explicitly with `int(...)` before doing the arithmetic.
+
+*What I should have noticed sooner.* This is exactly where money bugs live — data crossing a
+boundary loses its type, and the next line quietly assumes it did not. `--strict` catching this on a
+fee calculation is the type checker earning its place.
+
+**Error 3 — I designed the agent's front door twice.**
+
+*What broke.* My tests called `run_agent(exception=...)`, but the implementation asked for
+`task_input=` and `untrusted=` separately.
+
+*The real cause.* While writing the implementation I realised that handing the agent a whole
+reconciliation exception would tie the agent permanently to one business domain. The architecture
+promises a second domain later. So I changed the shape mid-implementation — and forgot the tests
+already assumed the old one.
+
+*How we fixed it.* Updated the test helper to unpack the exception. The agent package now imports
+nothing from the domain at all.
+
+*What I should have noticed sooner.* When I change a function's shape during implementation, the
+tests written against the old shape are part of that change, not a separate chore. Small slip, but
+it is the kind that gets forgotten and shows up as a confusing failure an hour later.
+
+### Design decisions worth remembering
+
+**1. The recorder computes fingerprints itself and offers no way to supply one.**
+A test inspects the recording function's own parameters and fails if the word "fingerprint" appears.
+One code path produces fingerprints, so the compiler and the guard can never disagree about what a
+result looks like.
+
+**2. The recorder refuses to be used out of order.**
+Recording before starting, finishing twice, recording after finishing — all raise a clear error
+rather than quietly producing a half-built trajectory.
+
+**3. The trajectory id is derived from the correlation id, not randomly generated.**
+Run the same case twice with the same id and you get the same trajectory id. Random ids would make
+every recording unique and every comparison impossible.
+
+**4. Time is injected, not read from the clock.**
+The recorder is handed a function that returns the current time. Tests hand it a fake clock that
+ticks predictably. Without this, no test involving a trajectory could ever be exactly repeatable.
+
+**5. Three separate endings: resolved, escalated, failed.**
+"Escalated" means the agent gave up safely — out of budget, too many tool errors, or it decided to
+hand over. "Failed" means the agent did something structurally wrong, such as naming a tool that was
+never offered. Merging them would hide broken model behaviour inside a normal-looking outcome.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 266 passed (199 before, 67 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 54 source files |
+| import-linter | 5 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+No policy gate, no guard, no compiler, no classifier, no router. No real language model — the
+provider adapter is deliberately absent so that the whole suite keeps running offline. No retries or
+backoff on tool calls yet; those arrive with the gate in Phase 7, which is where timeouts belong.

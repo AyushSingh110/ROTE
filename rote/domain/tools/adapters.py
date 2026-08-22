@@ -9,6 +9,7 @@ from rote.contracts.canonical import canonical_hash
 from rote.contracts.common import Money
 from rote.contracts.errors import ToolRequestError, UnknownToolError
 from rote.contracts.reconciliation import WorldSnapshot
+from rote.contracts.tools import ToolSpec
 from rote.domain.tools.contracts import (
     FindBankLinesByAmountRequest,
     FindBankLinesByAmountResponse,
@@ -35,7 +36,7 @@ from rote.domain.tools.contracts import (
     VoidDuplicateBankLineRequest,
     VoidDuplicateBankLineResponse,
 )
-from rote.domain.tools.registry import TOOL_REQUESTS
+from rote.domain.tools.registry import MUTATING_TOOLS, TOOL_NAMES, TOOL_REQUESTS
 from rote.domain.world import ReconciliationWorld
 
 MERCHANT_SEGMENTS: tuple[str, ...] = ("small_business", "mid_market", "enterprise")
@@ -65,6 +66,16 @@ class ReconciliationTools:
 
     def snapshot(self) -> WorldSnapshot:
         return self._world.snapshot()
+
+    def available_tools(self) -> tuple[ToolSpec, ...]:
+        return tuple(
+            ToolSpec(
+                name=name,
+                mutating=name in MUTATING_TOOLS,
+                parameters=TOOL_REQUESTS[name].model_json_schema(),
+            )
+            for name in TOOL_NAMES
+        )
 
     def invoke(self, name: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         request_model = TOOL_REQUESTS.get(name)

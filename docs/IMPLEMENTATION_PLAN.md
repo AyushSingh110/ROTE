@@ -288,7 +288,51 @@ by signature — it is not given them).
 
 **Measurable result:** PASS on 500/500 ground truths, FAIL on 50/50 deliberately corrupted ones.
 
-### Phase 5 — Hand-written live agent loop · `TODO`
+### Phase 5 — Hand-written live agent loop + trajectory recording · `DONE` (2026-08-22)
+
+**Measured result — achieved.**
+
+```text
+500 exceptions, seed 5, offline, no API key
+exploration 0.0   trajectories 500   outcomes {resolved: 500}   verdicts {pass: 500}
+                  steps per run: min 2 / median 4 / max 4
+exploration 0.35  trajectories 500   steps per run: min 4 / median 6 / max 6
+determinism       same seed -> identical tool sequences across all 500 runs
+tool variety      5 distinct sequences over the whole dataset, modal support 0.37
+```
+
+266 tests passed (67 new) · ruff clean · `mypy --strict` clean over 54 files · import-linter 5/5.
+
+**⚠ The offline model scored 500/500. That is a warning, not a success.** Reported agent
+implementations plateau at 85–92%; a stand-in that never errs is behaving like a hand-written
+procedure, not an agent. **A compilability result computed only from `offline-heuristic-1`
+trajectories is not a research result** — it would measure my own heuristic's self-consistency.
+Phase 8 must run its probe on trajectories from a real model, and §I.8 skeleton agreement exists to
+prove the discovered procedure belongs to the task rather than the model. Every trajectory records
+`agent_model_id` so any later report can be split by producing model.
+
+**Two forced deviations from the §B sketch**, recorded rather than made silently:
+
+1. `category` / `category_confidence` are nullable. The classifier is Phase 13, so a Phase 5 run
+   genuinely has no category. Side benefit: Phase 8 will group by the dataset's **true** category,
+   which keeps "is the procedure stable?" separate from "can the classifier pick the right label?".
+2. `GateVerdict` gains `UNGATED`. The gate is Phase 7; rather than leave the field empty, every step
+   states out loud that no gate stood in its path. A Phase 7 test can then assert no `UNGATED` step
+   remains. A visible gap is safer than an absent one.
+
+**Decisions.** (a) The agent talks only to a `Toolbox` protocol in `contracts/tools.py`; the gate
+implements it in Phase 7 and the agent will not notice. It can only see tools the boundary offers,
+so a withheld tool is invisible rather than merely forbidden. (b) `run_agent` takes
+`task_input`/`untrusted`, not a `ReconciliationException`, so `rote/agent` imports nothing from
+`rote/domain`. (c) Three endings — `resolved`, `escalated`, `failed` — so a structurally broken
+model (naming a tool never offered) cannot hide inside a normal-looking escalation. (d) The recorder
+computes fingerprints itself and exposes no parameter to supply one; a test asserts the signature
+never mentions "fingerprint". (e) Trajectory ids are derived from the correlation id, and the clock
+is injected, so recordings are reproducible.
+
+**Enforced by test:** the agent package imports no framework, never mentions ground truth or the
+Phase 4 oracle, and never imports a tool adapter.
+
 
 No LangGraph. Explicit `while` loop, hard step cap, token budget, wall-clock budget, offline fake
 model for tests.
