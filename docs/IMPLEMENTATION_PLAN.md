@@ -603,7 +603,61 @@ recorded, not silently resolved; type mismatches never bind; a plan that asks fo
 **Measurable result:** replay pass rate on the 30% holdout per plan, with outcome / action / path
 equality reported separately and playback misses counted.
 
-### Phase 10 — Plan Registry · `TODO`
+### Phase 10 — Plan Registry, lifecycle, shadow mode, sign-off, kill switch · `DONE` (2026-08-22)
+
+**Phase 9 contracts FROZEN** after three checks, all now tested: (1) an unknown formula name fails
+closed — no fallback, no default, and no dynamic lookup anywhere in the compiler (`getattr`,
+`importlib`, `__import__` all banned by test); a forged plan carrying an invented name *raises*
+rather than quietly producing a number. (2) `MAX_ALTERNATIVES` cannot change the chosen formula —
+compilation run at 0, 1, 3, 5 and 50 yields an identical winner. (3) `MAX_OPERANDS` rejects rather
+than guesses — a cap that hides the true operands finds nothing and truncates, whatever survives any
+cap still reproduces every run, and a narrower cap never invents a formula a wider cap rejected.
+
+**Measured result.**
+
+```text
+six categories registered      -> all six landed in SHADOW, none active
+20 agreeing shadow runs each   -> all six then activated by a named human
+kill switch on one             -> no longer served, immediately
+
+registry contents      : {active: 5, inactive: 1, shadow: 2}
+ledger entries         : 23     ledger chain valid: True
+every active validated : True   every active signed off by a human: True
+
+lifecycle rebuilt from the ledger alone:
+  duplicate_entry  v1:shadow(system:compiler) -> v1:active(human:ops-lead-42) -> v1:inactive(system:guard)
+  fee_mismatch     v1:shadow(system:compiler) -> v1:active(human:ops-lead-42) -> v2:shadow(system:compiler)
+```
+
+530 tests passed (50 new) · ruff clean · `mypy --strict` clean over 85 files · import-linter 6/6.
+
+**Every refusal, fired for the reason it claims:**
+
+```text
+system actor activating      -> refused: activation needs a named human actor, got 'system:auto'
+activating with no sign-off  -> refused: activation needs a sign-off note on the diff
+activating on thin evidence  -> refused: 1 agreeing shadow runs, 20 needed
+registering unvalidated plan -> refused: has never been replay-validated
+shadowing an active plan     -> refused: is active, not shadowing
+```
+
+**Decisions.** (a) An unvalidated plan cannot even be **registered** — refused outright, not stored
+as inactive, because it is not a candidate for anything. (b) A plan that passes validation lands in
+**SHADOW, never ACTIVE**: passing validation is a technical claim about held-out recordings, not
+permission. (c) **There is no override parameter** — a test reads `activate`'s signature and fails
+if force/override/skip/bypass/ignore appears. That is the difference between a rule and a policy; a
+policy gets waived at 3am during an incident. (d) **Asymmetry is deliberate**: the system may
+*remove* permission automatically (one shadow disagreement demotes; the kill switch needs no human)
+but can never *grant* it — a test feeds 50 agreeing shadow runs and confirms the plan still waits.
+(e) A killed plan cannot be switched back on; it must shadow and be signed off again.
+
+**Deliberately not done.** Shadow mode **records** observations, it does not produce them — the
+registry owns the rule (20 agreeing, 0 disagreeing) and accepts recorded outcomes; running a plan
+beside the live agent needs the executor (Phase 11). The separation is deliberate: the permission
+rule is testable today with no executor in existence. Nothing has yet executed a compiled plan
+against the world — *permitted to run* and *running* remain two different things, and only the first
+is built.
+
 
 **Tests first:** a plan without a passing `ValidationReport` can never reach `ACTIVE`, with no
 override flag; every transition writes a ledger entry naming the actor; the kill switch works.

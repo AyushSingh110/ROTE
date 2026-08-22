@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
@@ -141,3 +142,5 @@ class Plan(BaseModel):
     coverage_count: int = Field(ge=0)
     coverage_total: int = Field(ge=0)
     validation: ValidationReport | None
+    activated_by: str | None = None
+    activated_at: datetime | None = None

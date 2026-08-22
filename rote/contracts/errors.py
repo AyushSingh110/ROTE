@@ -48,3 +48,6 @@ class PolicyError(RoteError):
 
 
 class CompilerError(RoteError): ...
+
+
+class RegistryError(RoteError): ...

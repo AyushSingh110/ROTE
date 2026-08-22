@@ -2071,3 +2071,174 @@ constant within its category.
 
 No Phase 10: no registry, no lifecycle, no shadow mode, no human sign-off, no kill switch. Every
 plan is still emitted as a draft, and passing validation is not the same as being allowed to run.
+
+---
+
+## 2026-08-22 — Session 13: the three safety checks, then Phase 10 — how a plan earns the right to run
+
+### Part one — the three checks before freezing
+
+Three properties had to hold before the derivation binding could be trusted. All three now have
+tests.
+
+**1. An unknown formula name fails closed.** The registry is a fixed list of four names. Ask for
+anything else and it refuses — it does not fall back, it does not guess, and there is no default.
+There is also a test proving the compiler never looks a formula up dynamically: no `getattr`, no
+`importlib`, no `__import__` anywhere in it. The only way to add a formula is to write one, with a
+test.
+
+I also forged a plan carrying an invented formula name and tried to replay it. It raises rather
+than quietly producing a number. **A corrupt plan must refuse to run, not run badly.**
+
+**2. The cap on how many alternatives are kept cannot change which formula is chosen.** This one
+mattered because I could easily have got it wrong. The search records the winner *and* the
+runners-up, and there is a limit on how many runners-up it stores. If that limit also decided the
+winner, then a storage setting would be quietly changing behaviour. The test runs the whole
+compilation with the limit set to 0, 1, 3, 5 and 50 and checks the chosen formula is identical
+every time. It is.
+
+**3. The cap on how many fields the search considers rejects rather than guesses.** If the true
+inputs fall outside the cap, the correct behaviour is to find nothing and let the plan truncate —
+never to settle for a formula that happens to fit. Tested by setting the cap so low the real answer
+is invisible: it finds nothing and the plan truncates. And a stronger check: whatever the cap,
+anything the search *does* return still reproduces every single run, and a narrower cap never
+invents a formula a wider cap rejected.
+
+All three pass. **The Phase 9 contracts are frozen.**
+
+### Part two — Phase 10: the registry
+
+This phase is small in code and large in meaning. It is the part of the system that answers:
+
+> **Who decided this program was allowed to touch money, and when?**
+
+Everything before it made the compiled plan *correct*. This makes it *permitted*. Those are
+different things, and conflating them is exactly the mistake the whole project exists to avoid.
+
+### The path a plan has to walk
+
+```text
+draft ──validated?──> shadow ──evidence + a named human──> active ──kill switch──> inactive
+   │                                                          │
+   └──failed──> inactive                                      └──superseded──> retired
+```
+
+Nothing skips a step. In particular:
+
+**A plan that has never been replay-validated cannot even be registered.** Not "is registered but
+inactive" — refused outright, because an unvalidated plan is not a candidate for anything.
+
+**A plan that passed validation lands in shadow, never active.** This is the point I would make
+first if asked what Rote actually contributes. Passing validation means *"it reproduces held-out
+recordings"*. That is a technical claim. It is not permission. Shadow mode is where a plan runs
+alongside the live agent, with no authority to act, and accumulates evidence about whether it
+agrees.
+
+**Activation needs four things at once**, and every one of them is refused independently:
+
+```text
+system actor activating      -> refused: activation needs a named human actor, got 'system:auto'
+activating with no sign-off  -> refused: activation needs a sign-off note on the diff
+activating on thin evidence  -> refused: 1 agreeing shadow runs, 20 needed
+registering unvalidated plan -> refused: has never been replay-validated
+```
+
+There is no override. Not a discouraged one — **there is no parameter to pass.** A test reads the
+function's own signature and fails if the words force, override, skip, bypass or ignore appear
+anywhere in it. That is the difference between a rule and a policy: a policy can be waived at three
+in the morning during an incident.
+
+**A single disagreement in shadow demotes the plan automatically.** Note the asymmetry, because it
+is deliberate: the system may *remove* permission on its own, but it can never *grant* it. There is
+a test that feeds fifty agreeing shadow runs and confirms the plan is still only shadowing. It
+waits for a human, forever if necessary.
+
+### The kill switch
+
+Any actor — human or system — can switch an active plan off, with a reason. A guard that detects
+too many escalations does not need to find a person first. Once off, the plan is no longer served,
+and it cannot be switched back on: it has to shadow again and be signed off again. **Turning
+something off is easy; turning it back on is deliberately not.**
+
+### The ledger is the record, not the registry
+
+The registry holds current state in memory. The **ledger** holds what happened. Every transition
+writes an entry naming who did it and why, and the whole history can be rebuilt from the ledger
+without the registry existing at all:
+
+```text
+duplicate_entry        v1:shadow(system:compiler) -> v1:active(human:ops-lead-42) -> v1:inactive(system:guard)
+fee_mismatch           v1:shadow(system:compiler) -> v1:active(human:ops-lead-42) -> v2:shadow(system:compiler)
+fx_rounding            v1:shadow(system:compiler) -> v1:active(human:ops-lead-42)
+```
+
+That is the answer to "why was this adjustment posted?" made concrete. Not "the plan did it" — but
+*this* version of the plan, activated by *this* named person, after *this many* agreeing shadow
+runs, and switched off later by the guard at *this* moment.
+
+### The measured result
+
+```text
+six categories registered      -> all six landed in shadow, none active
+20 agreeing shadow runs each   -> all six then activated by a named human
+kill switch on one             -> no longer served, immediately
+
+registry contents      : {active: 5, inactive: 1, shadow: 2}
+ledger entries         : 23
+ledger chain valid     : True
+active plans           : 5
+every active validated : True
+every active signed off: True
+```
+
+The last two lines are the ones that matter. **Every plan permitted to run has a passing validation
+report and a named human attached.** Not by convention — there is no code path that produces an
+active plan without both.
+
+### The mistake I made in the demonstration
+
+My first run of the demonstration printed this:
+
+```text
+system actor activating -> refused: only a shadowing plan may be activated, not active
+```
+
+Which looks fine, and is completely misleading. The refusal fired because the plan was *already
+active* by the time I tried — not because the actor was a machine. My demo was proving a different
+rule from the one it claimed.
+
+*What I should have noticed sooner:* a demonstration has to be arranged so the thing being shown is
+the only thing that could have caused the outcome. I fixed it by registering a fresh version that
+stays in shadow, so each refusal fires for exactly the reason printed beside it.
+
+The rule itself was never in doubt — there is a test for it. But **a misleading demonstration is
+worse than no demonstration**, because it invites someone to believe a check exists that has not
+actually been shown.
+
+### A smaller one
+
+I left an unused import in the registry and hid it from the linter by listing it in the module's
+export list. `ruff` was satisfied; the code was still wrong. Removed. Exporting something is not the
+same as using it, and I should not have reached for the export list to quiet a warning.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 530 passed (480 before, 50 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 85 source files |
+| import-linter | 6 contracts kept, 0 broken |
+
+### What is deliberately not done
+
+**Shadow mode records observations; it does not produce them.** The registry owns the *rule* —
+twenty agreeing runs, no disagreements — and accepts recorded outcomes. The thing that actually
+runs a plan beside the live agent needs the executor, which is Phase 11. That separation is
+deliberate: the permission rule is testable today without any executor existing.
+
+No executor, no guard, no classifier, no router. Nothing has yet executed a compiled plan against
+the world; a plan being *permitted* to run and a plan *running* are still two separate things, and
+only the first is built.
+
+**Standing caveat unchanged:** every number above carries `research grade: False`.
