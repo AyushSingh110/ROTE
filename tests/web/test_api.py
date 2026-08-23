@@ -116,3 +116,100 @@ class TestTheJsonApi:
         for scenario in ScenarioId:
             client.get(f"/api/scenarios/{scenario.value}")
         assert client.get("/api/scenarios/automated").json() == before
+
+
+def _first(client: TestClient, **match: object) -> str:
+    for item in client.get("/api/backlog").json()["items"]:
+        page = client.get(f"/live/{item['exception_id']}").text
+        if all(str(value) in page for value in match.values()):
+            return str(item["exception_id"])
+    raise LookupError(f"no live case matching {match}")
+
+
+class TestTheLiveQueue:
+    def test_the_queue_page_renders(self, client: TestClient) -> None:
+        response = client.get("/queue")
+        assert response.status_code == 200
+        assert "Traceback" not in response.text
+        assert "EXC-" in response.text
+
+    def test_the_backlog_is_json_and_hides_ground_truth(self, client: TestClient) -> None:
+        body = client.get("/api/backlog").json()
+        assert body["total"] > 0
+        assert body["items"]
+        assert "category" not in body["items"][0]
+
+    def test_a_live_case_page_renders(self, client: TestClient) -> None:
+        first = client.get("/api/backlog").json()["items"][0]["exception_id"]
+        response = client.get(f"/live/{first}")
+        assert response.status_code == 200
+        assert "untrusted" in response.text
+
+    def test_an_unknown_exception_is_a_404(self, client: TestClient) -> None:
+        assert client.get("/live/EXC-nope").status_code == 404
+        assert client.post("/api/resolve", json={"exception_id": "EXC-nope"}).status_code == 404
+
+    def test_a_malformed_resolve_body_is_rejected(self, client: TestClient) -> None:
+        assert client.post("/api/resolve", json={}).status_code == 422
+
+
+class TestResolvingOverHttp:
+    def test_an_ambiguous_case_refuses_without_touching_a_plan(self, client: TestClient) -> None:
+        target = _first(client, reason="ambiguous_evidence")
+        before = client.get("/api/world").json()["world_hash"]
+        ledger_before = client.get("/api/ledger").json()["total"]
+
+        body = client.post("/api/resolve", json={"exception_id": target}).json()
+        assert body["decision"] == "escalate"
+        assert body["route_reason"] == "ambiguous_evidence"
+        assert body["plan_lookups"] == 0
+        assert body["compiled_steps_executed"] == 0
+        assert body["plan_id"] is None
+        assert len(body["co_holding_categories"]) > 1
+        assert body["world_changed"] is False
+
+        assert client.get("/api/world").json()["world_hash"] == before
+        assert client.get("/api/ledger").json()["total"] == ledger_before
+
+    def test_an_unambiguous_case_automates_and_moves_the_world(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        before = client.get("/api/world").json()["world_hash"]
+        body = client.post("/api/resolve", json={"exception_id": target}).json()
+        assert body["decision"] == "automate"
+        assert body["plan_lookups"] == 1
+        assert body["compiled_steps_executed"] > 0
+        assert body["guard_inspections"] >= body["compiled_steps_executed"]
+        assert body["model_calls_after_classification"] == 0
+        assert body["outcome_hash"]
+        assert client.get("/api/world").json()["world_hash"] != before
+
+    def test_resolving_the_same_case_twice_acts_once(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        client.post("/api/resolve", json={"exception_id": target})
+        after_first = client.get("/api/world").json()["world_hash"]
+        ledger_after_first = client.get("/api/ledger").json()["total"]
+
+        second = client.post("/api/resolve", json={"exception_id": target}).json()
+        assert second["already_resolved"] is True
+        assert second["world_changed"] is False
+        assert client.get("/api/world").json()["world_hash"] == after_first
+        assert client.get("/api/ledger").json()["total"] == ledger_after_first
+
+    def test_the_ledger_stays_valid_after_resolving(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        client.post("/api/resolve", json={"exception_id": target})
+        ledger = client.get("/api/ledger").json()
+        assert ledger["valid"] is True
+        assert ledger["first_broken_seq"] is None
+
+    def test_the_form_post_redirects_back_to_the_case(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        response = client.post(f"/live/{target}/resolve", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/live/{target}"
+
+    def test_the_ledger_page_renders(self, client: TestClient) -> None:
+        response = client.get("/ledger")
+        assert response.status_code == 200
+        assert "Traceback" not in response.text
+        assert "valid" in response.text

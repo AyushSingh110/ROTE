@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from rote.observability.logging import get_logger
 from rote.service.scenario import (
@@ -19,6 +20,7 @@ from rote.service.scenario import (
     ScenarioResult,
     run_scenario,
 )
+from rote.service.session import ResolutionView, SessionRuntime, live_session
 
 HERE = Path(__file__).parent
 BANNER = "Offline prototype — research grade: False"
@@ -45,10 +47,18 @@ def _resolve(scenario_id: str) -> ScenarioId:
         raise HTTPException(status_code=404, detail=f"no scenario {scenario_id!r}") from None
 
 
+QUEUE_PAGE = 60
+
+
+class ResolveRequest(BaseModel):
+    exception_id: str = Field(min_length=1)
+
+
 def warmup() -> float:
     started = time.perf_counter()
     for scenario in ScenarioId:
         run_scenario(scenario)
+    live_session()
     return time.perf_counter() - started
 
 
@@ -98,6 +108,73 @@ def create_app() -> FastAPI:
             scenario_id=scenario.value,
             screen=screen,
         )
+
+    def session() -> SessionRuntime:
+        return live_session()
+
+    def _known(exception_id: str) -> None:
+        if exception_id not in {item.exception_id for item in session().backlog()}:
+            raise HTTPException(status_code=404, detail=f"no exception {exception_id!r}")
+
+    @app.get("/queue", response_class=HTMLResponse)
+    def queue(request: Request) -> HTMLResponse:
+        runtime = session()
+        items = runtime.backlog()[:QUEUE_PAGE]
+        return page(
+            request,
+            "queue.html",
+            rows=[(item, runtime.preview(item.exception_id)) for item in items],
+            shown=len(items),
+            total=len(runtime.backlog()),
+        )
+
+    @app.get("/live/{exception_id}", response_class=HTMLResponse)
+    def live_case(request: Request, exception_id: str) -> HTMLResponse:
+        _known(exception_id)
+        runtime = session()
+        return page(
+            request,
+            "live.html",
+            detail=runtime.investigation(exception_id),
+            preview=runtime.preview(exception_id),
+            resolution=runtime.resolution_for(exception_id),
+            world=runtime.world_view(),
+        )
+
+    @app.post("/live/{exception_id}/resolve")
+    def resolve_case(exception_id: str) -> RedirectResponse:
+        _known(exception_id)
+        session().resolve(exception_id)
+        return RedirectResponse(url=f"/live/{exception_id}", status_code=303)
+
+    @app.get("/ledger", response_class=HTMLResponse)
+    def ledger_page(request: Request) -> HTMLResponse:
+        runtime = session()
+        return page(
+            request, "ledger.html", ledger=runtime.ledger_view(), world=runtime.world_view()
+        )
+
+    @app.get("/api/backlog")
+    def api_backlog() -> dict[str, Any]:
+        runtime = session()
+        return {
+            "total": len(runtime.backlog()),
+            "items": [item.model_dump(mode="json") for item in runtime.backlog()[:QUEUE_PAGE]],
+        }
+
+    @app.post("/api/resolve")
+    def api_resolve(body: ResolveRequest) -> dict[str, Any]:
+        _known(body.exception_id)
+        resolution: ResolutionView = session().resolve(body.exception_id)
+        return resolution.model_dump(mode="json")
+
+    @app.get("/api/ledger")
+    def api_ledger() -> dict[str, Any]:
+        return session().ledger_view().model_dump(mode="json")
+
+    @app.get("/api/world")
+    def api_world() -> dict[str, Any]:
+        return session().world_view().model_dump(mode="json")
 
     @app.get("/api/scenarios")
     def list_scenarios() -> dict[str, Any]:

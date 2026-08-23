@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Live queue{% endblock %}
+{% block subtitle %}&mdash; live exception queue{% endblock %}
+{% block strapline %}Pick any case. Nothing below is pre-selected or pre-computed &mdash; the
+classifier and router run when the page loads, and nothing executes until you ask.{% endblock %}
+{% block content %}
+
+<div class="panel">
+  <h2>Backlog &mdash; showing {{ shown }} of {{ total }}</h2>
+  <div class="scroll">
+    <table>
+      <tr>
+        <th>Exception</th><th>Internal</th><th>Bank</th><th>Captured</th>
+        <th>Lines</th><th>Note</th><th>Procedures that fit</th><th>Would</th><th>Status</th>
+      </tr>
+      {% for item, preview in rows %}
+      <tr>
+        <td class="mono"><a href="/live/{{ item.exception_id }}">{{ item.exception_id }}</a></td>
+        <td class="num">{{ item.internal_minor_units }} {{ item.internal_currency }}</td>
+        <td class="num">
+          {%- if item.bank_minor_units is not none -%}
+            {{ item.bank_minor_units }} {{ item.bank_currency }}
+          {%- else -%}&mdash;{%- endif -%}
+        </td>
+        <td class="mono">{{ item.captured_on }}</td>
+        <td class="num">{{ item.candidate_lines }}</td>
+        <td>{{ 'yes' if item.has_untrusted_note else '&mdash;'|safe }}</td>
+        <td class="mono">
+          {%- if preview.fitting_categories -%}
+            {{ preview.fitting_categories|join(', ') }}
+          {%- else -%}none{%- endif -%}
+        </td>
+        <td>
+          {% if preview.route_kind.value == 'compiled_plan' %}
+            <span class="pill automate">AUTOMATE</span>
+          {% else %}
+            <span class="pill escalate">REFUSE</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ item.status }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">The <em>Would</em> column is a routing
+    preview: the classifier and router have run, but no plan was fetched and nothing was executed.
+    Open a case to run it for real.</p>
+</div>
+
+{% endblock %}

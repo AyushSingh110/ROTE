@@ -267,6 +267,16 @@ SCENARIOS: dict[ScenarioId, ScenarioSpec] = {
 }
 
 
+# the compiled system and the dataset are shared with the live session so a process pays
+# the compilation cost once, not once per consumer
+def compiled_system(*, killed: bool = False) -> CompiledSystem:
+    return _system(killed)
+
+
+def demo_dataset() -> GeneratedDataset:
+    return _dataset()
+
+
 def scenario_spec(scenario: ScenarioId) -> ScenarioSpec:
     return SCENARIOS[scenario]
 
@@ -727,6 +737,8 @@ def _clock() -> Callable[[], datetime]:
 
 __all__ = [
     "SCENARIOS",
+    "compiled_system",
+    "demo_dataset",
     "Decision",
     "DecisionView",
     "EvidenceView",

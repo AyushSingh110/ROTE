@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.exception_id }}{% endblock %}
+{% block subtitle %}&mdash; {{ detail.exception_id }}{% endblock %}
+{% block strapline %}Live run against the session runtime. One world, one gate, one
+ledger.{% endblock %}
+{% block content %}
+
+<nav class="steps">
+  <a href="/queue">&larr; Queue</a>
+  <a href="/ledger">Ledger</a>
+</nav>
+
+{% if resolution %}
+{% set d = resolution %}
+{% set automated = d.decision.value == 'automate' %}
+<div class="decision {{ d.decision.value }}">
+  <h2>{% if automated %}AUTOMATED{% else %}REFUSED AUTOMATION{% endif %}</h2>
+  <p>{{ d.headline }}</p>
+  {% if d.co_holding_categories %}
+  <div class="fits">
+    {% for name in d.co_holding_categories %}<span class="chip on">{{ name }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>What happened</h2>
+    <dl class="kv">
+      <dt>Route</dt><dd>{{ d.route_kind.value }} &middot; {{ d.route_reason.value }}</dd>
+      <dt>Plan</dt><dd>{% if d.plan_id %}{{ d.plan_id }} v{{ d.plan_version }}{% else %}
+        none selected{% endif %}</dd>
+      <dt>Plan lookups</dt><dd>{{ d.plan_lookups }}</dd>
+      <dt>Compiled steps run</dt><dd>{{ d.compiled_steps_executed }}</dd>
+      <dt>Guard inspections</dt><dd>{{ d.guard_inspections }}</dd>
+      <dt>Model calls</dt><dd>{{ d.model_calls_classification }} classification,
+        {{ d.model_calls_after_classification }} after</dd>
+      {% if d.outcome_hash %}<dt>Outcome hash</dt><dd>{{ d.outcome_hash }}</dd>{% endif %}
+    </dl>
+  </div>
+  <div class="panel">
+    <h2>Effect on the world</h2>
+    <dl class="kv">
+      <dt>World before</dt><dd>{{ d.world_hash_before[:24] }}&hellip;</dd>
+      <dt>World after</dt><dd>{{ d.world_hash_after[:24] }}&hellip;</dd>
+      <dt>Changed</dt><dd>{{ 'yes' if d.world_changed else 'no — nothing moved' }}</dd>
+      <dt>Ledger entries</dt><dd>{{ d.ledger_before }} &rarr; {{ d.ledger_after }}</dd>
+      <dt>Chain</dt><dd>{{ 'valid' if d.ledger_valid else 'BROKEN' }}</dd>
+      {% if d.already_resolved %}<dt>Repeat request</dt>
+        <dd>already resolved — nothing was done again</dd>{% endif %}
+    </dl>
+  </div>
+</div>
+
+{% if d.calls %}
+<div class="panel">
+  <h2>Calls the compiled plan made, each through the gate</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>#</th><th>Tool</th><th>Arguments</th></tr>
+      {% for call in d.calls %}
+      <tr><td class="num">{{ loop.index0 }}</td><td class="mono">{{ call.tool }}</td>
+        <td class="mono">{{ call.args }}</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if d.guard_objection or d.handover_reason %}
+<div class="panel">
+  <h2>Defence that stopped it</h2>
+  <dl class="kv">
+    {% if d.guard_objection %}<dt>Guard</dt><dd>{{ d.guard_objection }}</dd>{% endif %}
+    {% if d.handover_reason %}<dt>Handover</dt><dd>{{ d.handover_reason }}</dd>{% endif %}
+  </dl>
+  {% if d.quarantined_result %}
+  <div class="quarantine" style="margin-top:12px">
+    <span class="tag">quarantined result &mdash; never became state</span>
+    <p>{{ d.quarantined_result }}</p>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+
+<div class="panel">
+  <h2>Routing preview &mdash; nothing has run yet</h2>
+  <dl class="kv">
+    <dt>Classifier said</dt><dd>{{ preview.classified_as }}
+      ({{ preview.classifier_confidence_per_mille }}/1000)</dd>
+    <dt>Procedures that fit</dt><dd>{{ preview.fitting_categories|join(', ') or 'none' }}</dd>
+    <dt>Router would</dt><dd>{{ preview.route_kind.value }} &middot;
+      {{ preview.route_reason.value }}</dd>
+  </dl>
+  {% if preview.ambiguous %}
+  <div class="callout" style="margin-top:14px">
+    <strong>Multiple procedures are consistent with this evidence.</strong>
+    {{ preview.co_holding_categories|join(' and ') }} both fit. Resolving this case will refuse
+    automation without ever fetching a plan.
+  </div>
+  {% endif %}
+  <form method="post" action="/live/{{ detail.exception_id }}/resolve" style="margin-top:16px">
+    <button type="submit" style="font:inherit;padding:10px 20px;border-radius:8px;
+      border:1px solid #16181d;background:#16181d;color:#fff;cursor:pointer">
+      Resolve this exception
+    </button>
+  </form>
+</div>
+
+{% endif %}
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Structured evidence &mdash; trusted</h2>
+    <div class="scroll">
+      <table>
+        {% for key, value in detail.facts.items() %}
+        <tr><td>{{ key }}</td><td class="mono">{{ value }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Free text &mdash; untrusted, quarantined</h2>
+    {% for block in detail.untrusted %}
+      <div class="quarantine">
+        <span class="tag">untrusted &middot; {{ block.source_path }} &middot;
+          {{ block.byte_length }} bytes</span>
+        <p>&ldquo;{{ block.content }}&rdquo;</p>
+      </div>
+    {% else %}
+      <p style="color:#5b6472">No free text attached.</p>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Session world</h2>
+  <dl class="kv">
+    <dt>World hash</dt><dd>{{ world.world_hash }}</dd>
+    <dt>Records</dt><dd>{{ world.settlement_records }} total, {{ world.matched_records }} matched,
+      {{ world.partially_settled_records }} partially settled</dd>
+    <dt>Adjustments posted</dt><dd>{{ world.adjustments }}</dd>
+    <dt>Bank lines voided</dt><dd>{{ world.voided_lines }}</dd>
+  </dl>
+</div>
+
+{% endblock %}

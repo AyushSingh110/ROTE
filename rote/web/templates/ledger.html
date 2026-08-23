@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Ledger{% endblock %}
+{% block subtitle %}&mdash; audit ledger{% endblock %}
+{% block strapline %}Append-only and hash-chained. Every money-moving decision in this session is
+here, including the ones that were refused.{% endblock %}
+{% block content %}
+
+<nav class="steps">
+  <a href="/queue">&larr; Queue</a>
+</nav>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Chain</h2>
+    <dl class="kv">
+      <dt>Entries</dt><dd>{{ ledger.total }}</dd>
+      <dt>Verification</dt><dd>{{ 'valid' if ledger.valid else 'BROKEN' }}</dd>
+      <dt>First broken entry</dt><dd>{{ ledger.first_broken_seq if not ledger.valid else 'none' }}</dd>
+    </dl>
+  </div>
+  <div class="panel">
+    <h2>World</h2>
+    <dl class="kv">
+      <dt>Hash</dt><dd>{{ world.world_hash[:32] }}&hellip;</dd>
+      <dt>Matched</dt><dd>{{ world.matched_records }} of {{ world.settlement_records }}</dd>
+      <dt>Adjustments</dt><dd>{{ world.adjustments }}</dd>
+      <dt>Voided lines</dt><dd>{{ world.voided_lines }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Entries (most recent {{ ledger.entries|length }})</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>#</th><th>Event</th><th>Task</th><th>Actor</th><th>Tool</th><th>Detail</th>
+        <th>When</th></tr>
+      {% for entry in ledger.entries %}
+      <tr>
+        <td class="num">{{ entry.seq }}</td>
+        <td class="mono">{{ entry.event_type }}</td>
+        <td class="mono">{{ entry.task_id }}</td>
+        <td class="mono">{{ entry.actor }}</td>
+        <td class="mono">{{ entry.tool or '—' }}</td>
+        <td class="mono">{{ entry.detail or '—' }}</td>
+        <td class="mono">{{ entry.occurred_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" style="color:#5b6472">Nothing has been proposed yet. Resolve a case
+        from the queue.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">An <span class="mono">intent</span>
+    entry is written <em>before</em> the tool is called, so a crash between the two leaves an
+    <span class="mono">unknown</span> for a human rather than a silent double action.</p>
+</div>
+
+{% endblock %}
