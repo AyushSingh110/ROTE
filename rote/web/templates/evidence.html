@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% set ev = result.evidence %}
+{% block title %}Evidence &middot; {{ result.investigation.exception_id }}{% endblock %}
+{% block subtitle %}&mdash; {{ result.spec.title }}{% endblock %}
+{% block strapline %}How many procedures are consistent with this evidence?{% endblock %}
+{% block content %}
+
+{% if ev.ambiguous %}
+<div class="callout">
+  <strong>Multiple procedures are consistent with this evidence.</strong>
+  Two different resolutions both fit the structured facts, and they do different things with money.
+  Nothing below is allowed to break the tie.
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Which categories fit the structured evidence</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>Category</th><th>Precondition holds?</th></tr>
+      {% for c in ev.candidates %}
+      <tr>
+        <td class="mono">{{ c.category }}</td>
+        <td>{% if c.precondition_holds %}<strong>yes</strong>{% else %}
+          <span style="color:#5b6472">no</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="fits">
+    {% for name in ev.fitting_categories %}<span class="chip on">{{ name }}</span>{% endfor %}
+  </div>
+  <p style="margin:12px 0 0"><strong>{{ ev.fitting_categories|length }}</strong> procedure(s) fit.
+    {{ ev.note }}</p>
+  <dl class="kv" style="margin-top:12px">
+    <dt>Classifier said</dt><dd>{{ ev.classified_as }}
+      ({{ ev.classifier_confidence_per_mille }}/1000)</dd>
+    <dt>Plan lookups performed</dt><dd>{{ ev.plan_lookups }}</dd>
+  </dl>
+  {% if ev.ambiguous %}
+  <p style="color:#5b6472;font-size:13px;margin:10px 0 0">The plan registry was consulted
+    <strong>{{ ev.plan_lookups }}</strong> times. Ambiguity is decided before the lookup, so there
+    is no path by which this case could reach a compiled plan.</p>
+  {% endif %}
+</div>
+
+{% if ev.plan %}
+{% set plan = ev.plan %}
+<div class="panel">
+  <h2>The compiled procedure and where it came from</h2>
+  <dl class="kv">
+    <dt>Plan</dt><dd>{{ plan.plan_id }} v{{ plan.version }} ({{ plan.status }})</dd>
+    <dt>Skeleton</dt><dd>{{ plan.skeleton|join(' &rarr; ')|safe }}</dd>
+    <dt>Built from</dt><dd>{{ plan.built_from_runs }} outcome-verified runs</dd>
+    <dt>Support</dt><dd>{{ plan.coverage_count }}/{{ plan.coverage_total }} runs took this
+      exact sequence</dd>
+    <dt>Held-out replay</dt><dd>{{ plan.holdout_path_equal }}/{{ plan.holdout_size }} reproduced,
+      {{ plan.playback_misses }} playback misses &mdash;
+      passed: {{ plan.validation_passed }}</dd>
+    <dt>Shadow evidence</dt><dd>{{ ev.shadow_agreements_required }} agreeing runs required before
+      a human may switch it on</dd>
+    <dt>Signed off by</dt><dd>{{ plan.approved_by }} at {{ plan.approved_at }}</dd>
+    <dt>Learned from</dt><dd>{{ plan.agent_model_id }}</dd>
+  </dl>
+</div>
+
+<div class="panel">
+  <h2>Argument provenance &mdash; every value traced to its source</h2>
+  {% for step in plan.steps %}
+  <div class="scroll" style="margin-bottom:14px">
+    <table>
+      <tr><th colspan="4">Step {{ step.index }} &mdash; {{ step.tool }}</th></tr>
+      <tr><th>Argument</th><th>Bound as</th><th>Source</th><th>Evidence</th></tr>
+      {% for b in step.bindings %}
+      <tr>
+        <td class="mono">{{ b.arg_name }}</td>
+        <td class="mono">{{ b.kind }}</td>
+        <td class="mono">{{ b.source }}</td>
+        <td class="num">{{ b.evidence_run_count }} runs
+          {%- if b.alternatives %}, {{ b.alternatives }} alt{% endif %}</td>
+      </tr>
+      {% endfor %}
+      <tr><td colspan="4" style="color:#5b6472;font-size:13px">
+        Guard expectations: {{ step.known_result_shapes }} known result shapes,
+        {{ step.numeric_expectations }} numeric ranges,
+        {{ step.categorical_expectations }} value sets
+        {%- if step.invariants %}, invariants {{ step.invariants|join(', ') }}{% endif %}
+      </td></tr>
+    </table>
+  </div>
+  {% endfor %}
+  <p style="color:#5b6472;font-size:13px;margin:0">No language model appears in this artifact.
+    Each argument is a typed binding with the number of runs that agreed on it.</p>
+</div>
+{% else %}
+<div class="panel">
+  <h2>No compiled procedure was served</h2>
+  <p style="margin:0">Because the evidence does not identify a single procedure, no plan was
+    fetched, no plan was selected, and nothing was executed.</p>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Audit trail</h2>
+  <dl class="kv">
+    <dt>Plan-lifecycle ledger</dt><dd>{{ ev.ledger_entries }} entries</dd>
+    <dt>Hash chain</dt><dd>{{ 'valid' if ev.ledger_valid else 'BROKEN' }}</dd>
+  </dl>
+</div>
+
+<p class="closing">Next: what did Rote actually do?
+  <a href="/s/{{ scenario_id }}/decision">See the decision &rarr;</a></p>
+
+{% endblock %}

@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% set d = result.decision %}
+{% set automated = d.decision.value == 'automate' %}
+{% block title %}Decision &middot; {{ result.investigation.exception_id }}{% endblock %}
+{% block subtitle %}&mdash; {{ result.spec.title }}{% endblock %}
+{% block strapline %}{{ result.spec.question }}{% endblock %}
+{% block content %}
+
+<div class="decision {{ d.decision.value }}">
+  <h2>{% if automated %}AUTOMATE{% else %}REFUSE AUTOMATION{% endif %}</h2>
+  <p>{{ d.headline }}</p>
+  {% if d.co_holding_categories %}
+  <div class="fits">
+    {% for name in d.co_holding_categories %}<span class="chip on">{{ name }}</span>{% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>How it was routed</h2>
+    <dl class="kv">
+      <dt>Route</dt><dd>{{ d.route_kind.value }}</dd>
+      <dt>Reason</dt><dd>{{ d.route_reason.value }}</dd>
+      <dt>Detail</dt><dd>{{ d.route_detail or '—' }}</dd>
+      <dt>Plan</dt><dd>{% if d.plan_id %}{{ d.plan_id }} v{{ d.plan_version }}{% else %}
+        none selected{% endif %}</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Model calls</h2>
+    <dl class="kv">
+      <dt>Classification</dt><dd>{{ d.model_calls_classification }}</dd>
+      <dt>After classification</dt><dd>{{ d.model_calls_after_classification }}</dd>
+    </dl>
+    <p style="color:#5b6472;font-size:13px;margin:10px 0 0">The claim is not &ldquo;zero
+      LLM&rdquo;. It is one bounded classification call that cannot choose a tool, instead of
+      several unbounded calls that can.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>What actually happened</h2>
+  <dl class="kv">
+    <dt>Outcome</dt><dd>{{ d.outcome }}</dd>
+    <dt>Compiled steps executed</dt><dd>{{ d.compiled_steps_executed }}</dd>
+    {% if d.outcome_hash %}<dt>Outcome hash</dt><dd>{{ d.outcome_hash }}</dd>{% endif %}
+    {% if d.replay_outcome_hash %}
+      <dt>Replayed hash</dt><dd>{{ d.replay_outcome_hash }}</dd>
+      <dt>Replay reproduces</dt><dd>{{ 'yes, byte for byte' if d.replay_match else 'NO' }}</dd>
+    {% endif %}
+    <dt>World before</dt><dd>{{ d.world_hash_before[:24] }}&hellip;</dd>
+    <dt>World after</dt><dd>{{ d.world_hash_after[:24] }}&hellip;</dd>
+    <dt>World changed</dt>
+    <dd>{{ 'no — nothing was moved' if d.world_hash_before == d.world_hash_after else 'yes' }}</dd>
+  </dl>
+</div>
+
+{% if d.guard_objection or d.handover_reason or d.quarantined_result %}
+<div class="panel">
+  <h2>Defence that stopped it</h2>
+  <dl class="kv">
+    {% if d.guard_objection %}<dt>Guard objection</dt><dd>{{ d.guard_objection }}</dd>{% endif %}
+    {% if d.handover_reason %}<dt>Handover reason</dt><dd>{{ d.handover_reason }}</dd>{% endif %}
+    {% if d.handover_step is not none %}
+      <dt>Stopped at step</dt><dd>{{ d.handover_step }}</dd>{% endif %}
+  </dl>
+  {% if d.quarantined_result %}
+  <div class="quarantine" style="margin-top:12px">
+    <span class="tag">quarantined result &mdash; never became state</span>
+    <p>{{ d.quarantined_result }}</p>
+  </div>
+  <p style="color:#5b6472;font-size:13px;margin:8px 0 0">A diverging tool result is exactly the
+    poisoning vector, so it crosses to the human as untrusted text and never as trusted state.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Audit</h2>
+  <dl class="kv">
+    <dt>Money-movement ledger</dt><dd>{{ d.ledger_entries }} entries</dd>
+    <dt>Hash chain</dt><dd>{{ 'valid' if d.ledger_valid else 'BROKEN' }}</dd>
+  </dl>
+  {% if not automated and d.ledger_entries == 0 %}
+  <p style="margin:10px 0 0"><strong>Zero entries.</strong> Refusing is not a failed attempt.
+    Nothing was proposed, nothing was gated, nothing was written.</p>
+  {% endif %}
+</div>
+
+<p class="closing">{{ result.spec.closing_line }}</p>
+
+{% endblock %}

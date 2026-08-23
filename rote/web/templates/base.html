@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Rote{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="banner">
+    <span>{{ banner }}</span>
+    <span>Synthetic domain &middot; stand-in agent &middot; <b>no real payment rail</b></span>
+  </div>
+
+  <header class="masthead">
+    <h1><a href="/" style="text-decoration:none;color:inherit">Rote</a>
+      {% block subtitle %}{% endblock %}</h1>
+    <p>{% block strapline %}A reliability layer that decides when agent behaviour has earned
+      deterministic authority.{% endblock %}</p>
+  </header>
+
+  <main>
+    {% if result is defined %}
+    <nav class="steps">
+      {% for s in screens %}
+        <a class="{{ 'on' if s == screen else '' }}" href="/s/{{ scenario_id }}/{{ s }}">
+          {{ loop.index }}. {{ s|capitalize }}
+        </a>
+      {% endfor %}
+      <a href="/api/scenarios/{{ scenario_id }}">JSON</a>
+    </nav>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer>Every figure on this page is produced by running the system offline. Nothing is
+    hard-coded for the demonstration.</footer>
+</body>
+</html>

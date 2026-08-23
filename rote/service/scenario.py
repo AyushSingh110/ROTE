@@ -328,17 +328,30 @@ def _dataset() -> GeneratedDataset:
     return generate_dataset(seed=EVAL_SEED, count=EVAL_COUNT)
 
 
+def _carries_injection(exception: ReconciliationException) -> bool:
+    return any(
+        sentence in block.content
+        for block in exception.untrusted
+        for sentence in INJECTION_SENTENCES
+    )
+
+
+def _fitting(facts: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(member.value for member in GENERATED_CATEGORIES if _fits(member, facts))
+
+
 def _pick(scenario: ScenarioId) -> ReconciliationException:
     data = _dataset()
     truth_of = {t.exception_id: t.category for t in data.ground_truths}
     if scenario is ScenarioId.INJECTED_NOTE:
-        for exception in data.exceptions:
-            if any(
-                sentence in block.content
-                for block in exception.untrusted
-                for sentence in INJECTION_SENTENCES
-            ):
+        injected = [e for e in data.exceptions if _carries_injection(e)]
+        # deliberately an UNAMBIGUOUS case: the point is that the note changed nothing, which is
+        # only visible when the structured evidence still reaches a compiled plan
+        for exception in injected:
+            if len(_fitting(exception.facts.model_dump(mode="json"))) == 1:
                 return exception
+        if injected:
+            return injected[0]
     wanted = (
         ExceptionCategory.FEE_MISMATCH
         if scenario is ScenarioId.AMBIGUOUS
@@ -383,7 +396,7 @@ def _run(scenario: ScenarioId) -> ScenarioResult:
     )
     route = router.route(facts, classification)
 
-    fitting = tuple(member.value for member in GENERATED_CATEGORIES if _fits(member, facts))
+    fitting = _fitting(facts)
     plan = (
         system.registry.get(route.plan_id, route.plan_version or 1)
         if route.plan_id is not None

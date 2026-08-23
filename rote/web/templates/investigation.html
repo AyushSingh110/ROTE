@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% set inv = result.investigation %}
+{% block title %}Investigation &middot; {{ inv.exception_id }}{% endblock %}
+{% block subtitle %}&mdash; {{ result.spec.title }}{% endblock %}
+{% block strapline %}{{ result.spec.question }}{% endblock %}
+{% block content %}
+
+<div class="panel">
+  <h2>The exception</h2>
+  <dl class="kv">
+    <dt>Exception</dt><dd>{{ inv.exception_id }}</dd>
+    <dt>Domain</dt><dd>{{ inv.domain.value }}</dd>
+    <dt>Scenario</dt><dd>{{ result.spec.id.value }}</dd>
+    <dt>Agent outcome</dt><dd>{{ inv.agent_outcome }}</dd>
+  </dl>
+</div>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Structured evidence &mdash; trusted</h2>
+    <div class="scroll">
+      <table>
+        {% for key, value in inv.facts.items() %}
+        <tr><td>{{ key }}</td><td class="mono">{{ value }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Free text &mdash; untrusted, quarantined</h2>
+    {% for block in inv.untrusted %}
+      <div class="quarantine">
+        <span class="tag">untrusted &middot; {{ block.source_path }} &middot;
+          {{ block.byte_length }} bytes</span>
+        <p>&ldquo;{{ block.content }}&rdquo;</p>
+      </div>
+    {% else %}
+      <p style="color:#5b6472">No free text attached to this exception.</p>
+    {% endfor %}
+    <p style="color:#5b6472;font-size:13px;margin:10px 0 0">This text is carried in its own
+      channel and never joined to the structured fields. A classifier may read it and return a
+      category; it can never return an action.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>What the live agent did &mdash; every call through the policy gate</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>#</th><th>Tool</th><th>Arguments</th><th>Gate</th><th>Result fields</th></tr>
+      {% for call in inv.trajectory %}
+      <tr>
+        <td class="num">{{ call.index }}</td>
+        <td class="mono">{{ call.tool }}</td>
+        <td class="mono">{{ call.arguments }}</td>
+        <td><span class="verdict {{ call.gate_verdict }}">{{ call.gate_verdict }}</span></td>
+        <td class="mono">{{ call.result_fields|join(', ') if call.result_fields else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">The agent holds no tool directly. Every
+    row above passed an allowlist, a per-category money cap, and a gate-derived idempotency key
+    that the caller cannot choose.</p>
+</div>
+
+<p class="closing">Next: was this behaviour repeatable enough to compile?
+  <a href="/s/{{ scenario_id }}/evidence">See the evidence &rarr;</a></p>
+
+{% endblock %}

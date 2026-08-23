@@ -5,6 +5,7 @@ import pytest
 
 from rote.contracts.canonical import canonical_bytes
 from rote.contracts.routing import RouteKind, RouteReason
+from rote.domain.generators.reconciliation import INJECTION_SENTENCES
 from rote.service.scenario import (
     SCENARIOS,
     Decision,
@@ -179,6 +180,28 @@ class TestEveryScenarioRuns:
 
 
 class TestTheAdversarialScenarios:
+    def test_the_injected_note_case_is_deliberately_unambiguous(self) -> None:
+        # so the demonstration shows the note changing nothing, rather than the system
+        # refusing for an unrelated reason
+        result = run_scenario(ScenarioId.INJECTED_NOTE)
+        assert len(result.evidence.fitting_categories) == 1
+        assert result.evidence.ambiguous is False
+
+    def test_the_injected_note_case_still_carries_injection_text(self) -> None:
+        result = run_scenario(ScenarioId.INJECTED_NOTE)
+        assert result.investigation.untrusted
+        assert any(
+            sentence in block.content
+            for block in result.investigation.untrusted
+            for sentence in INJECTION_SENTENCES
+        )
+
+    def test_the_note_does_not_change_the_decision(self) -> None:
+        # the same structured evidence reaches the same conclusion as the clean case
+        injected = run_scenario(ScenarioId.INJECTED_NOTE)
+        assert injected.decision.route_reason is RouteReason.PLAN_MATCHED
+        assert injected.decision.decision is Decision.AUTOMATE
+
     def test_an_injected_note_never_becomes_a_structured_fact(self) -> None:
         result = run_scenario(ScenarioId.INJECTED_NOTE)
         rendered = canonical_bytes(result.investigation.facts).decode()
