@@ -23,10 +23,16 @@ RESULT_SIGNALS = (
 )
 
 
+# threshold chosen by the Phase 14 sweep, not by eye: over 9,633 labelled divergences
+# the approved 500 missed 100% of them, while 100 misses 21.3% with 0 false aborts on
+# 1,650 clean results. The rule was fixed before the data was seen. See JOURNAL.md.
+CALIBRATED_THRESHOLD_PER_MILLE = 100
+
+
 def default_guard_config() -> GuardConfig:
     return GuardConfig(
         weights=GuardWeights(structural=350, numeric=250, categorical=250, behavioural=150),
-        threshold_per_mille=500,
+        threshold_per_mille=CALIBRATED_THRESHOLD_PER_MILLE,
         retry_penalty_per_mille=300,
         added_key_penalty_per_mille=400,
     )

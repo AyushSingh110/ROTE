@@ -775,6 +775,9 @@ defaults mean every previously compiled plan still validates and gets the older 
 safe category as Phase 10's activation fields.
 
 **Deliberately not done.** No threshold chosen — the calibration finding stands open for Phase 14.
+*(Settled in Phase 14: the sweep confirmed 500 misses 100% of 9,633 labelled divergences and moved
+the default to 100. `test_no_single_signal_can_abort_under_the_approved_defaults` was rewritten as
+`test_a_single_signal_can_now_abort_after_calibration`.)*
 Behavioural is implemented and unit-tested but never fires in practice because nothing retries yet.
 Invariants are not yet attached to any compiled plan: the registry and veto work, but the
 category→invariant table is hand-written work still to do.
@@ -854,10 +857,86 @@ passes the diverging result as untrusted data.
 
 **Measurable result:** handover succeeds on every injected divergence class.
 
-### Phase 14 — Divergence evaluation · `TODO`
+### Phase 14 — Divergence evaluation, and the Guard calibration deferred from Phase 12 · `DONE` (2026-08-23)
 
-**Measurable result:** the missed-divergence vs false-abort curve across thresholds, and the
-chosen operating point with its justification in operations language.
+**Measured result.** 9,633 applicable divergences scored against 1,650 clean results drawn from an
+**unseen seed**. Weights held at the approved 350/250/250/150; the sweep varies the threshold only.
+
+```text
+ threshold  divergences  missed  missed %   clean  false aborts  false %
+         0         9633       0      0.0%    1650          1650   100.0%
+        50         9633    2061     21.3%    1650             0     0.0%
+       100         9633    2061     21.3%    1650             0     0.0%
+       150         9633    3711     38.5%    1650             0     0.0%
+       250         9633    3711     38.5%    1650             0     0.0%
+       350         9633    6422     66.6%    1650             0     0.0%
+       500         9633    9633    100.0%    1650             0     0.0%
+```
+
+**At the approved threshold of 500 the Guard missed 100% of 9,633 divergences.** Phase 12's
+calibration finding, confirmed at scale on a properly built labelled set.
+
+**The selection rule, fixed in writing before any data was looked at:** *subject to the false-abort
+budget, fewest missed divergences wins; ties go to the **higher** threshold, because a less
+sensitive guard is cheaper to operate.* It is a pure function of the curve and the budget — a test
+asserts it takes no other argument.
+
+| false-abort budget | threshold chosen | missed | missed % | false aborts |
+|---|---|---|---|---|
+| 0.0% | 100 | 2061 | 21.3% | 0 |
+| 1.0% | 100 | 2061 | 21.3% | 0 |
+| 2.0% | 100 | 2061 | 21.3% | 0 |
+| 5.0% | 100 | 2061 | 21.3% | 0 |
+| 10.0% | 100 | 2061 | 21.3% | 0 |
+
+**Applied.** `CALIBRATED_THRESHOLD_PER_MILLE = 100` in `rote/runtime/guard.py`, carrying the
+evidence in a comment. Detection moved from 0% to **78.7%** of labelled divergences with no observed
+false abort.
+
+698 tests passed (31 new) · ruff clean · `mypy --strict` clean over 109 files · import-linter 7/7.
+
+**⚠ The honest limit of this curve.** The false-abort column is **flat at zero above threshold 0**,
+so this is a one-sided slope, not a genuine trade-off. The clean cohort is a different seed of the
+same generator: its shapes are identical and its amounts fall inside the learned ranges, so it
+contains **no legitimate variation** — the only thing that produces a real false alarm. Therefore:
+
+> **100 is a floor established by evidence, not a balanced optimum.** The evidence rules out 500
+> conclusively. It cannot say whether 100 is too twitchy, because nothing here can twitch. The
+> operating point must be re-derived on real trajectories, and the **added-field sensitivity is the
+> first thing to re-examine**: schema drift scores 140, so at 100 a vendor adding an optional field
+> now aborts a compiled run, where at 150 it would not.
+
+**What still gets through at 100, and why most of it should.** `retried x1650` — one failed attempt
+followed by success scores 45 by design, and aborting on a successful retry would be wrong.
+`unseen_enum x411` — the mutated field was a high-cardinality string (a reference number), for which
+no categorical domain exists to violate. **No threshold detects a changed value in an unconstrained
+text field**; that is a limit of the signal, not of the calibration.
+
+**A defect found in my own measurement.** The eval set was inflating the miss count in two ways,
+both discovered while building this phase. (a) A mutation that could not apply — "make a number
+enormous" on a result holding no number — was still counted as a divergence the Guard missed; the
+generator now reports `applied=False` and the sweep excludes those. (b) Worse, a mutation that
+applied but changed nothing: the type-change mutator rendered its target as text, and `str("abc")`
+is `"abc"`, so **1,334 non-events were being scored as missed divergences**. The fix generalises —
+after mutating, compare with the original and refuse to label an unchanged result a divergence.
+Correcting (b) alone moved the measured miss rate from 35.2% to 21.3%. **A test-data generator needs
+its own tests as much as the code it tests**, and when the metric is "how much does the Guard miss",
+every fake divergence lands on the wrong side of the ledger. Both are now covered by tests.
+
+**Decisions.** (a) The sweep is **offline arithmetic over stored score vectors**, never a system
+re-run — this is why Phase 12 recorded the raw per-signal vector rather than a boolean; one scoring
+pass covers twenty-one thresholds. (b) **Weights were not touched**, per §I.4: whether 350/250/250/150
+is the right shape is a separate question needing its own evidence. (c) `rote/eval/` imports contracts
+and the domain generator only, so the evaluator cannot reach into a running system.
+
+**Deliberately not done.** `tool_error` and `injected_note` are outside this sweep, correctly: a tool
+error never reaches the Guard (the executor escalates before inspecting), and an injected note is a
+classifier-level divergence already measured in Phase 13 (precondition check, 5/5). Standing caveat:
+every trajectory comes from the offline stand-in — `research grade: False`.
+
+**Tests first:** the selection rule cannot see anything but the curve; a no-op mutation is not a
+divergence; an inapplicable mutation is not a divergence; the default threshold equals the one the
+sweep selected; a single signal at full strength now aborts.
 
 ### Phase 15 — Shadow mode · `TODO` *(optional per A3)*
 

@@ -2717,3 +2717,160 @@ anywhere. A test asserts the router imports nothing that could do similarity.
 takes a handoff and resumes the live agent on it is the end-to-end wiring, not this phase.
 
 **Guard thresholds untouched**, as instructed. The calibration finding from Phase 12 stands open.
+
+---
+
+## 2026-08-23 — Session 17: Phase 14, choosing the Guard's threshold with evidence
+
+### The question this phase had to answer
+
+Phase 12 built the Guard and found something uncomfortable: it detected every kind of corruption
+correctly, and then let all of it through. The heaviest signal was worth 0.35 and the abort
+threshold was 0.50, so **no single signal could ever reach it**.
+
+I deliberately did not fix that by picking a nicer number. Choosing a threshold by looking at a
+table until it flatters you is exactly the thing the project rules forbid. This phase does it
+properly.
+
+### The rule, written down before any data was looked at
+
+> Subject to the false-alarm rate staying within budget, choose the threshold that misses the
+> fewest real divergences. Where two thresholds tie, take the **higher** one, because a less
+> sensitive guard is cheaper to live with.
+
+That is implemented as a function of the curve and nothing else. There is a test asserting it takes
+exactly two arguments — the curve and the budget — so it has nothing else it could be influenced by.
+
+### How the sweep works, and why it is arithmetic rather than re-running anything
+
+The Guard already records the raw score for every signal on every check, not just a pass/fail. That
+was the deliberate design decision in Phase 12, and this is why it mattered.
+
+So the sweep never re-runs the system. It scores every case **once**, stores the vectors, and then
+tries every threshold from 0 to 1000 in steps of 50 as pure arithmetic over that stored data. One
+pass, twenty-one thresholds.
+
+### Fixing the eval set first, twice
+
+Phase 12's table was built from five hand-written mutations and I flagged then that its coverage was
+poor. Building this properly turned up **two** ways the old set was lying, both in the same
+direction — inflating how much the Guard was missing.
+
+**One: a mutation that could not apply was still counted as a divergence.** If a result held no
+number, "make a number enormous" did nothing — and the unchanged result was still filed as
+something the Guard failed to catch. The generator now reports `applied=False` and the sweep ignores
+those.
+
+**Two: a mutation that applied but changed nothing.** The type-change mutator rendered its target as
+text. On a number that is a real change. On a string, `str("abc")` is `"abc"` — nothing happened,
+and 1,334 non-events were being counted as missed divergences.
+
+The fix is one line and it generalises: **after mutating, compare against the original; if nothing
+changed, it is not a divergence.** Both defects are now guarded by tests.
+
+Correcting the second one alone moved the measured miss rate from 35.2% to 21.3%.
+
+*What I should have noticed sooner:* I built a corruption generator and never checked that it
+corrupted anything. **A test-data generator needs its own tests as much as the code it tests** — and
+when the thing you are measuring is "how much does the guard miss", every fake divergence lands on
+the wrong side of the ledger.
+
+### The measured curve
+
+9,633 applicable divergences, and 1,650 clean results drawn from a **different seed** so they are
+legitimate but not identical to what the Guard learned.
+
+```text
+ threshold  divergences  missed  missed %   clean  false aborts  false %
+         0         9633       0      0.0%    1650          1650   100.0%
+        50         9633    2061     21.3%    1650             0     0.0%
+       100         9633    2061     21.3%    1650             0     0.0%
+       150         9633    3711     38.5%    1650             0     0.0%
+       250         9633    3711     38.5%    1650             0     0.0%
+       350         9633    6422     66.6%    1650             0     0.0%
+       500         9633    9633    100.0%    1650             0     0.0%
+```
+
+**Read the bottom row.** At the approved threshold of 500 the Guard missed **every single one** of
+9,633 divergences. Phase 12's suspicion, confirmed at scale on a properly built eval set.
+
+The rule selected **threshold 100**, at every budget from 0% to 10%: 2,061 missed (21.3%), zero
+false alarms. 50 and 100 tie, and the tie-break took the higher one.
+
+### What the change actually did
+
+The default moved from 500 to 100. The Guard went from catching nothing to catching 78.7% of
+labelled divergences with no observed false alarms.
+
+One consequence worth naming: at 100, a **newly appearing optional field now aborts the run** — it
+scores 140. At 150 it would not. Whether a vendor adding a field should stop a compiled plan is a
+genuine operational judgement, and this is the number most likely to move once real data exists.
+
+### The honest problem with this curve
+
+Look at the false-abort column: **zero at every threshold above 0.** That is not a trade-off curve,
+it is a one-sided slope where lower is simply better.
+
+The reason is that my "clean" cohort cannot produce a false alarm. It comes from a different seed,
+but the same generator — so the shapes are identical and the amounts land inside the learned ranges.
+There is no *legitimate variation* in it.
+
+Real data has plenty: a vendor adds a field, amounts drift outside a range learned last quarter, a
+new currency appears. Those are the things that cause false alarms, and none of them exist here.
+
+So the honest reading is:
+
+> **Threshold 100 is a floor established by evidence, not a balanced optimum.** The evidence rules
+> out 500 conclusively — it catches nothing. It cannot tell us whether 100 is too twitchy, because
+> nothing in this dataset can twitch. The operating point has to be re-derived when real
+> trajectories exist, and the added-field sensitivity is the first thing to re-examine.
+
+I would rather record that plainly than present a number with more confidence than it has earned.
+
+### The 21.3% that is still missed, and why most of it is correct
+
+```text
+threshold 100 lets through: retried x1650, unseen_enum x411
+```
+
+- **`retried` (1,650).** A call that failed once and then worked scores 0.045. That is *meant* to be
+  gentle — a single retry succeeding is normal life, not divergence. It would be wrong to abort on
+  it.
+- **`unseen_enum` (411).** These are cases where the mutated field was a high-cardinality string —
+  a reference number, say. The Guard never learned a set of allowed values for such a field,
+  because there is no such set. **It cannot detect a changed value in an unconstrained text field**,
+  and no threshold fixes that. It is a limit of the signal, not of the calibration.
+
+So of the 21.3% missed, the great majority is behaviour I would not want to change.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 698 passed (667 before, 31 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 109 source files |
+| import-linter | 7 contracts kept, 0 broken |
+
+### A small tidy-up worth noting
+
+Phase 12 had a test helper called `_sensitive()` that set a "deliberately tighter" threshold of 300
+to demonstrate the Guard aborting. After calibration, 300 is *looser* than the default — the comment
+had become false. Removed, and those tests now use the real default.
+
+**A stale comment that describes the opposite of what the code does is worse than no comment**, and
+this is the kind that appears whenever a constant moves underneath one.
+
+### What is deliberately not done
+
+**Weights were not touched.** The sweep varied the threshold only, with the approved weights fixed,
+which is what §I.4 specifies. Whether 350/250/250/150 is the right shape is a separate question and
+would need its own evidence.
+
+**`tool_error` and `injected_note` are not in this sweep**, and that is correct rather than an
+omission: a tool error never reaches the Guard — the executor escalates before inspecting — and an
+injected note is a classifier-level divergence, already measured in Phase 13 where the precondition
+check caught 5 of 5.
+
+**Standing caveat:** the trajectories are from the offline stand-in, so every number carries
+`research grade: False`.

@@ -11,7 +11,11 @@ from rote.contracts.execution import EscalationReason, ExecutionOutcome
 from rote.contracts.guard import GuardConfig, GuardSignal, GuardWeights
 from rote.contracts.invariants import INVARIANTS, evaluate_invariants
 from rote.contracts.plan import PlanStep, StepExpectation
-from rote.runtime.guard import Guard, default_guard_config
+from rote.runtime.guard import (
+    CALIBRATED_THRESHOLD_PER_MILLE,
+    Guard,
+    default_guard_config,
+)
 
 RUNTIME_PACKAGE = pathlib.Path(__file__).resolve().parents[2] / "rote" / "runtime"
 
@@ -48,12 +52,6 @@ def step(index: int = 0, tool: str = "post_adjustment", **overrides: Any) -> Pla
 
 def guard(config: GuardConfig | None = None) -> Guard:
     return Guard(config=config or default_guard_config())
-
-
-# a deliberately tighter threshold, so one structural break is enough to demonstrate
-# the wiring; the approved defaults need two signals, which is a separate finding
-def _sensitive() -> GuardConfig:
-    return default_guard_config().model_copy(update={"threshold_per_mille": 300})
 
 
 class TestEachSignalFiresOnItsOwnFixtureAndNothingElse:
@@ -131,28 +129,33 @@ class TestTheScoreCombination:
         expected = (1000 * 350 + 1000 * 250) // 1000
         assert verdict.divergence_per_mille == expected
 
-    def test_a_small_divergence_still_passes(self) -> None:
+    def test_an_added_field_now_aborts_at_the_calibrated_threshold(self) -> None:
+        # before calibration this scored 140 against a threshold of 500 and passed;
+        # the sweep moved the threshold to 100, so schema drift is now caught
         verdict = guard().check_result(step(), {**CLEAN_RESULT, "surcharge": 12})
         assert verdict.divergence_per_mille == 140
-        assert verdict.passed is True
+        assert verdict.passed is False
 
     def test_two_signals_together_cross_the_threshold_and_abort(self) -> None:
         verdict = guard().check_result(step(), {"status": "reversed"})
         assert verdict.divergence_per_mille >= verdict.threshold_per_mille
         assert verdict.passed is False
 
-    def test_no_single_signal_can_abort_under_the_approved_defaults(self) -> None:
-        # the heaviest weight is 350 and the threshold is 500, so one signal at full
-        # strength scores 350 and is let through. Recorded as a calibration finding.
+    def test_a_single_signal_can_now_abort_after_calibration(self) -> None:
+        # the Phase 12 finding was that no single signal could reach the threshold.
+        # The Phase 14 sweep fixed that: the lightest weight now clears it.
         weights = default_guard_config().weights
-        heaviest = max(
+        lightest = min(
             weights.structural, weights.numeric, weights.categorical, weights.behavioural
         )
-        assert heaviest < default_guard_config().threshold_per_mille
+        assert lightest > default_guard_config().threshold_per_mille
         lone = guard().check_result(step(), {"status": "settled"})
         assert lone.score_for(GuardSignal.STRUCTURAL) == 1000
         assert lone.divergence_per_mille == 350
-        assert lone.passed is True
+        assert lone.passed is False
+
+    def test_the_default_threshold_is_the_one_the_sweep_selected(self) -> None:
+        assert default_guard_config().threshold_per_mille == CALIBRATED_THRESHOLD_PER_MILLE
 
     def test_the_threshold_used_is_recorded_on_the_verdict(self) -> None:
         verdict = guard().check_result(step(), CLEAN_RESULT)
@@ -321,7 +324,7 @@ class TestTheGuardDrivesTheExecutor:
         from rote.runtime.executor import execute_plan
 
         plan, toolbox = self._plan_and_toolbox({"surprise": None})
-        keeper = Guard(config=_sensitive())
+        keeper = Guard(config=default_guard_config())
         result = execute_plan(
             plan=plan,
             task_input={"record_id": "REC-99"},
@@ -339,7 +342,7 @@ class TestTheGuardDrivesTheExecutor:
             plan=plan,
             task_input={"record_id": "REC-99"},
             toolbox=toolbox,
-            inspector=Guard(config=_sensitive()),
+            inspector=Guard(config=default_guard_config()),
         )
         assert [name for name, _args in toolbox.calls] == ["alpha"]
 
