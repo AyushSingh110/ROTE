@@ -8,6 +8,9 @@ from rote.contracts.plan import PlanStatus
 from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
 from rote.runtime.preconditions import precondition_holds
 
+# the confidence a classification must carry before a compiled plan may be served
+DEFAULT_MIN_CONFIDENCE_PER_MILLE = 700
+
 
 # no reasoning, no embedding, no model. Biased toward the live agent: a wrong "live" costs
 # money, a wrong "plan" costs correctness, and the second is never traded for the first.

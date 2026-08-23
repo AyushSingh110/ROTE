@@ -316,3 +316,89 @@ class TestTheSessionSurface:
     ) -> None:
         served = {plan.category for plan in session.registry.all_plans()}
         assert served <= set(ExceptionCategory)
+
+
+# ---------------------------------------------------------------- B2
+class TestTheGateItselfRecognisesAReplay:
+    # the session's resolved-case cache short-circuits before the gate, so this test replays the
+    # exact call the compiled plan made straight at the live session's own gate. No bypass is
+    # added and no gate semantics change: the second call simply reaches the gate.
+    def test_replaying_a_committed_action_reaches_the_gate_and_is_recognised(self) -> None:
+        runtime = fresh()
+        target = first_where(
+            runtime,
+            route_reason=RouteReason.PLAN_MATCHED,
+            plan_id="reconciliation:fx_rounding",
+        )
+        resolution = runtime.resolve(target)
+        assert resolution.decision is Decision.AUTOMATE
+
+        mutating = {spec.name for spec in runtime.tool_specs() if spec.mutating}
+        replayed = [call for call in resolution.calls if call.tool in mutating]
+        assert replayed, "the plan moved no money, so there is nothing to replay"
+
+        boundary = runtime.boundary_for(target)
+        world_before = runtime.world_view()
+        intents_before = runtime.count_events(target, LedgerEventType.INTENT)
+        outcomes_before = runtime.count_events(target, LedgerEventType.OUTCOME)
+        permits_before = runtime.count_events(target, LedgerEventType.GATE_VERDICT)
+
+        for call in replayed:
+            again = boundary.invoke(call.tool, call.args)
+            assert isinstance(again, dict)
+
+        # the gate returned the recorded result rather than acting a second time
+        assert runtime.world_view().world_hash == world_before.world_hash
+        assert runtime.world_view().adjustments == world_before.adjustments
+        assert runtime.count_events(target, LedgerEventType.INTENT) == intents_before
+        assert runtime.count_events(target, LedgerEventType.OUTCOME) == outcomes_before
+        # a replay is still a decision, so the gate records one verdict per replayed call
+        assert runtime.count_events(target, LedgerEventType.GATE_VERDICT) == permits_before + len(
+            replayed
+        )
+        assert runtime.ledger_view().valid is True
+
+    def test_the_replay_verdict_says_it_was_a_replay(self) -> None:
+        runtime = fresh()
+        target = first_where(
+            runtime,
+            route_reason=RouteReason.PLAN_MATCHED,
+            plan_id="reconciliation:fx_rounding",
+        )
+        resolution = runtime.resolve(target)
+        mutating = {spec.name for spec in runtime.tool_specs() if spec.mutating}
+        boundary = runtime.boundary_for(target)
+        for call in resolution.calls:
+            if call.tool in mutating:
+                boundary.invoke(call.tool, call.args)
+        reasons = [
+            entry.detail
+            for entry in runtime.ledger_view(limit=500).entries
+            if entry.task_id == target and entry.event_type == "gate_verdict"
+        ]
+        assert any("idempotent replay" in reason for reason in reasons)
+
+    def test_a_different_action_under_the_same_task_is_not_treated_as_a_replay(self) -> None:
+        runtime = fresh()
+        target = first_where(
+            runtime,
+            route_reason=RouteReason.PLAN_MATCHED,
+            plan_id="reconciliation:fx_rounding",
+        )
+        resolution = runtime.resolve(target)
+        mutating = {spec.name for spec in runtime.tool_specs() if spec.mutating}
+        original = next(call for call in resolution.calls if call.tool in mutating)
+        boundary = runtime.boundary_for(target)
+        altered = dict(original.args)
+        if "minor_units" in altered:
+            altered["minor_units"] = int(altered["minor_units"]) + 1
+        else:
+            pytest.skip("the money-moving call carries no amount to alter")
+        before = runtime.count_events(target, LedgerEventType.INTENT)
+        world_before = runtime.world_view().adjustments
+        boundary.invoke(original.tool, altered)
+        # the key is derived from the arguments, so a different amount is a genuinely new
+        # action: it gets its own INTENT rather than silently returning the recorded result
+        assert runtime.count_events(target, LedgerEventType.INTENT) == before + 1
+        assert runtime.world_view().adjustments == world_before + 1
+        assert runtime.ledger_view().valid is True

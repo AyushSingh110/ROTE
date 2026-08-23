@@ -22,8 +22,9 @@ PRIORITY: tuple[ExceptionCategory, ...] = (
 )
 
 
-# an evaluation stand-in, never part of the system: it lives here so no production package can
-# import it, and an import-linter contract proves none does
+# deterministic and model-free: it picks the first category whose tested precondition fits.
+# It holds no tools and returns an enum, so an injected note has no channel to become an
+# action. Used by both the live runtime and the frozen evaluation.
 class StructuredFieldsClassifier:
     model_id = MODEL_ID
     prompt_template_id = PROMPT_TEMPLATE_ID

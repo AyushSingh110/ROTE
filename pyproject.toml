@@ -132,7 +132,7 @@ source_modules = ["rote.runtime"]
 forbidden_modules = ["rote.compiler"]
 
 [[tool.importlinter.contracts]]
-name = "nothing the evaluator measures may import the evaluator"
+name = "the evaluator is imported by nothing, including the live demo"
 type = "forbidden"
 source_modules = [
     "rote.contracts",
@@ -143,8 +143,17 @@ source_modules = [
     "rote.runtime",
     "rote.agent",
     "rote.observability",
+    "rote.bootstrap",
+    "rote.service",
+    "rote.web",
 ]
 forbidden_modules = ["rote.eval"]
+
+[[tool.importlinter.contracts]]
+name = "bootstrap sits below the evaluator and the demo"
+type = "forbidden"
+source_modules = ["rote.bootstrap"]
+forbidden_modules = ["rote.eval", "rote.service", "rote.web"]
 
 [[tool.importlinter.contracts]]
 name = "nothing depends on the demo service layer"

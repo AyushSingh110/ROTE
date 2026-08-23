@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from rote.bootstrap.system import CompiledSystem
 from rote.contracts.canonical import canonical_hash
 from rote.contracts.common import (
     GENERATED_CATEGORIES,
@@ -23,13 +24,12 @@ from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
 from rote.contracts.tools import ToolSpec
 from rote.domain.generators.divergence import DivergenceLabel, inject
 from rote.domain.tools.adapters import ReconciliationTools
-from rote.eval.classifier_double import StructuredFieldsClassifier
-from rote.eval.harness import MIN_CONFIDENCE_PER_MILLE, CompiledSystem
 from rote.runtime.classifier import Classifier
+from rote.runtime.classifier_rules import StructuredFieldsClassifier
 from rote.runtime.executor import execute_plan
 from rote.runtime.guard import Guard, default_guard_config
 from rote.runtime.preconditions import precondition_holds
-from rote.runtime.router import Router
+from rote.runtime.router import DEFAULT_MIN_CONFIDENCE_PER_MILLE, Router
 from rote.safety.gate import PolicyGate
 from rote.safety.ledger import Ledger
 from rote.safety.policy_defaults import default_policy_config
@@ -356,6 +356,27 @@ class SessionRuntime:
         self._resolved[exception_id] = view
         return view
 
+    def tool_specs(self) -> tuple[ToolSpec, ...]:
+        return self._adapters.available_tools()
+
+    # the same gated boundary the compiled plan used, so a caller can replay a committed call
+    # straight at the gate. It grants no new authority: every call still passes the full gate.
+    def boundary_for(self, exception_id: str) -> Any:
+        exception = self._exception(exception_id)
+        view = self._resolved.get(exception_id)
+        category = None
+        if view is not None and view.plan_id is not None:
+            category = self.registry.get(view.plan_id, view.plan_version or 1).category
+        return self.gate.for_task(
+            PolicyContext(
+                task_id=exception.exception_id,
+                correlation_id=f"{exception.exception_id}:live",
+                path=self.execution_path,
+                category=category,
+                actor="system:executor",
+            )
+        )
+
     def resolution_for(self, exception_id: str) -> ResolutionView | None:
         return self._resolved.get(exception_id)
 
@@ -437,7 +458,7 @@ class SessionRuntime:
         router = Router(
             plans=spy,
             domain=Domain.RECONCILIATION,
-            min_confidence_per_mille=MIN_CONFIDENCE_PER_MILLE,
+            min_confidence_per_mille=DEFAULT_MIN_CONFIDENCE_PER_MILLE,
         )
         return classification, router.route(facts, classification), spy
 

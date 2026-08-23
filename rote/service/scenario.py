@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from rote.agent.loop import run_agent
 from rote.agent.models.offline import OfflineHeuristicModel
+from rote.bootstrap.system import CompiledSystem, compile_and_activate
 from rote.contracts.agent import AgentBudget
 from rote.contracts.canonical import canonical_hash
 from rote.contracts.common import GENERATED_CATEGORIES, Domain, ExceptionCategory
@@ -23,14 +24,13 @@ from rote.contracts.trajectory import Trajectory
 from rote.domain.generators.divergence import DivergenceLabel, inject
 from rote.domain.generators.reconciliation import INJECTION_SENTENCES, generate_dataset
 from rote.domain.tools.adapters import ReconciliationTools
-from rote.eval.classifier_double import StructuredFieldsClassifier
-from rote.eval.harness import MIN_CONFIDENCE_PER_MILLE, CompiledSystem, compile_and_activate
 from rote.recorder.recorder import TrajectoryRecorder
 from rote.runtime.classifier import Classifier
+from rote.runtime.classifier_rules import StructuredFieldsClassifier
 from rote.runtime.executor import execute_plan
 from rote.runtime.guard import Guard, default_guard_config
 from rote.runtime.preconditions import precondition_holds
-from rote.runtime.router import Router
+from rote.runtime.router import DEFAULT_MIN_CONFIDENCE_PER_MILLE, Router
 from rote.safety.gate import PolicyGate
 from rote.safety.ledger import Ledger
 from rote.safety.policy_defaults import default_policy_config
@@ -402,7 +402,9 @@ def _run(scenario: ScenarioId) -> ScenarioResult:
     )
     spy = _SpyPlanSource(system.registry)
     router = Router(
-        plans=spy, domain=Domain.RECONCILIATION, min_confidence_per_mille=MIN_CONFIDENCE_PER_MILLE
+        plans=spy,
+        domain=Domain.RECONCILIATION,
+        min_confidence_per_mille=DEFAULT_MIN_CONFIDENCE_PER_MILLE,
     )
     route = router.route(facts, classification)
 
