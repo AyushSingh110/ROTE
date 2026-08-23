@@ -145,3 +145,19 @@ source_modules = [
     "rote.observability",
 ]
 forbidden_modules = ["rote.eval"]
+
+[[tool.importlinter.contracts]]
+name = "nothing depends on the demo service layer"
+type = "forbidden"
+source_modules = [
+    "rote.contracts",
+    "rote.safety",
+    "rote.domain",
+    "rote.recorder",
+    "rote.compiler",
+    "rote.runtime",
+    "rote.agent",
+    "rote.observability",
+    "rote.eval",
+]
+forbidden_modules = ["rote.service"]
