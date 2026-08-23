@@ -53,6 +53,11 @@ class PolicyGate:
     def for_task(self, context: PolicyContext, *, dry_run: bool = True) -> GatedToolbox:
         return GatedToolbox(gate=self, context=context, dry_run=dry_run)
 
+    # a boundary is only as harmless as whatever sits behind it, and silence means it can act
+    @property
+    def mutates_the_world(self) -> bool:
+        return bool(getattr(self._adapters, "mutates_the_world", True))
+
     def _offered_tools(self, context: PolicyContext) -> tuple[ToolSpec, ...]:
         rule = self._config.rule_for(context.path, context.category)
         if rule is None:
@@ -257,6 +262,10 @@ class GatedToolbox:
         self._gate = gate
         self._context = context
         self._dry_run = dry_run
+
+    @property
+    def mutates_the_world(self) -> bool:
+        return self._gate.mutates_the_world
 
     def available_tools(self) -> tuple[ToolSpec, ...]:
         return self._gate._offered_tools(self._context)

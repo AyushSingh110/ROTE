@@ -15,6 +15,7 @@ from rote.contracts.execution import (
     outcome_hash,
 )
 from rote.contracts.plan import ArgBinding, BindingKind, Plan, PlanStatus, PlanStep
+from rote.contracts.shadow import RunAuthority
 from rote.contracts.tools import Toolbox
 from rote.contracts.trajectory import GateVerdict
 from rote.runtime.bindings import resolve_binding
@@ -22,6 +23,13 @@ from rote.runtime.bindings import resolve_binding
 GATE_REASONS: dict[GateVerdict, EscalationReason] = {
     GateVerdict.REFUSE: EscalationReason.GATE_NOT_ALLOWLISTED,
     GateVerdict.ESCALATE: EscalationReason.GATE_CAP_EXCEEDED,
+}
+
+# each authority maps to exactly one status, and neither maps to a status a plan has not
+# earned: there is no value here that lets a draft, deactivated or retired plan run
+REQUIRED_STATUS: dict[RunAuthority, PlanStatus] = {
+    RunAuthority.ACTIVE: PlanStatus.ACTIVE,
+    RunAuthority.SHADOW: PlanStatus.SHADOW,
 }
 
 
@@ -43,8 +51,9 @@ def execute_plan(
     task_input: dict[str, Any],
     toolbox: Toolbox,
     inspector: ResultInspector | None = None,
+    authority: RunAuthority = RunAuthority.ACTIVE,
 ) -> ExecutionResult:
-    _require_permission_to_run(plan)
+    _require_permission_to_run(plan, authority, toolbox)
     check = inspector or AcceptEveryResult()
     state = ExecutionState(task_input=dict(task_input), committed=())
     calls: list[ToolCall] = []
@@ -75,8 +84,10 @@ def execute_plan(
                 EscalationReason.GATE_NOT_ALLOWLISTED,
             )
             return _escalate(plan, calls, reason, state, step, None)
-        except RoteError:
-            return _escalate(plan, calls, EscalationReason.TOOL_ERROR, state, step, None)
+        except RoteError as error:
+            return _escalate(
+                plan, calls, EscalationReason.TOOL_ERROR, state, step, None, str(error)
+            )
 
         calls.append(ToolCall(tool=step.tool, args=resolved))
         # the result is pending here: it is not state until the inspector lets it become state
@@ -99,13 +110,21 @@ def execute_plan(
     )
 
 
-def _require_permission_to_run(plan: Plan) -> None:
-    if plan.status is not PlanStatus.ACTIVE:
-        raise ExecutorError(f"{plan.plan_id} is {plan.status.value}, only an active plan may run")
+def _require_permission_to_run(plan: Plan, authority: RunAuthority, toolbox: Toolbox) -> None:
+    required = REQUIRED_STATUS[authority]
+    if plan.status is not required:
+        raise ExecutorError(
+            f"{plan.plan_id} is {plan.status.value}, "
+            f"{authority.value} authority may only run a {required.value} plan"
+        )
     if plan.validation is None or not plan.validation.passed:
         raise ExecutorError(f"{plan.plan_id} has no passing validation report")
     if not plan.steps:
         raise ExecutorError(f"{plan.plan_id} has no steps to run")
+    # a shadowing plan has no authority to act, so a boundary that says nothing about
+    # itself is treated as one that can act, and refused
+    if authority is RunAuthority.SHADOW and getattr(toolbox, "mutates_the_world", True):
+        raise ExecutorError(f"{plan.plan_id} may only shadow behind a boundary that cannot act")
 
 
 def _resolve_arguments(step: PlanStep, state: ExecutionState) -> dict[str, Any] | None:
@@ -144,4 +163,4 @@ def _escalate(
     )
 
 
-__all__ = ["AcceptEveryResult", "ArgBinding", "BindingKind", "execute_plan"]
+__all__ = ["REQUIRED_STATUS", "AcceptEveryResult", "ArgBinding", "BindingKind", "execute_plan"]

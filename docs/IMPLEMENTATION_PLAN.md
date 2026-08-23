@@ -656,7 +656,8 @@ registry owns the rule (20 agreeing, 0 disagreeing) and accepts recorded outcome
 beside the live agent needs the executor (Phase 11). The separation is deliberate: the permission
 rule is testable today with no executor in existence. Nothing has yet executed a compiled plan
 against the world — *permitted to run* and *running* remain two different things, and only the first
-is built.
+is built. *(Phase 15 built the producer: a plan now runs beside the live agent against a playback
+boundary that has no adapter to act with, and the observations feed this rule.)*
 
 
 **Tests first:** a plan without a passing `ValidationReport` can never reach `ACTIVE`, with no
@@ -938,7 +939,114 @@ every trajectory comes from the offline stand-in — `research grade: False`.
 divergence; an inapplicable mutation is not a divergence; the default threshold equals the one the
 sweep selected; a single signal at full strength now aborts.
 
-### Phase 15 — Shadow mode · `TODO` *(optional per A3)*
+### Phase 15 — Shadow mode: a plan runs beside the live agent with no authority · `DONE` (2026-08-23)
+
+Closes the gap Phase 10 left open on purpose: the registry owned the promotion rule but nothing
+produced the evidence it consumes. Now something does.
+
+**The defect found before writing any of it.** The gate's `dry_run` flag is **a label on the ledger
+entry and nothing more** — `_execute` invokes the adapter whatever it says. Every run so far has
+written `dry_run: True` into the audit log while genuinely changing the world. Defensible for what it
+has meant (nothing is wired to a real rail) but the wrong foundation for shadow mode, whose entire
+safety property is *this run must not act*. Building on it would have moved money on every shadow run.
+
+**So "cannot act" is a property of construction, not a flag.** (a) A shadow run's tool boundary is
+`PlaybackToolbox`: it looks each proposed call up in the live agent's recording and returns the
+recorded result, or errors. **There is no adapter behind it to act with.** (b) The **real** `PolicyGate`
+still stands in front, with the recording where the adapters normally sit, so allowlists, caps and
+gate-owned idempotency all run unchanged — otherwise a plan could bank agreements for actions the gate
+would refuse. (c) The executor asks the boundary `mutates_the_world`, and **a boundary that does not
+answer is treated as one that can act, and refused** — the same fail-closed rule as the invariant
+registry.
+
+**Two authorities, and deliberately not an override flag.** `RunAuthority` is a closed two-value enum
+mapped to exactly one status each: `ACTIVE → ACTIVE`, `SHADOW → SHADOW`. There is no value that runs a
+draft, deactivated or retired plan, a passing validation report is still required, and a test asserts
+the table has exactly two entries whose values are exactly those two statuses. **SHADOW is a lesser
+authority, never a way past a status a plan has not earned.**
+
+**Measured result.**
+
+```text
+NEW TRAFFIC — an unseen seed, 500 exceptions handled by the live agent
+world unchanged by the shadow runs : True
+live ledger entries added by them  : 0
+
+category                  runs  agreed    rate  same effect  same path
+duplicate_entry             43      43  100.0%           43         43
+fee_mismatch               124     124  100.0%          124        124
+fx_rounding                 75      75  100.0%           75         75
+partial_payment             60      60  100.0%           60         60
+timing_cutoff              109     109  100.0%          109        109
+transposed_reference        89      89  100.0%           89         89
+ALL                        500     500  100.0%          500        500
+
+plans compiled -> {'shadow': 6}   all six exceeded the 20-agreement bar
+all six still waited for human:ops-lead-42 to sign off      ledger 18 entries, chain valid
+shadowing behind the real tools -> refused: may only shadow behind a boundary that cannot act
+shadowing with an active plan   -> refused: shadow authority may only run a shadow plan
+```
+
+732 tests passed (34 new) · ruff clean · `mypy --strict` clean over 112 files · import-linter 7/7.
+
+**⚠ Why 100% is not a research finding.** The live agent is the deterministic offline stand-in and the
+plan was compiled from its own recordings, so a plan reproducing those rules on new inputs is
+arithmetic, not evidence. **This measures that the mechanism is wired up, not that agents agree.** The
+two zero lines do carry weight: the world snapshot hash is byte-identical across 500 shadow runs and
+the live ledger grew by nothing.
+
+**Negative control 1 — every plan against traffic it was not compiled for.**
+
+```text
+mismatched runs 300   agreed 10 (3.3%)
+  playback_miss 140 · guard_objected 100 · binding_unresolved 30 · effect_differs 20
+  every false agreement: timing_cutoff plan on transposed_reference traffic (10)
+```
+
+The measurement can disagree, for named reasons. But all ten false agreements are **the pair Phase 13
+found the classifier confusing**, and not by coincidence: both categories are resolved by the identical
+procedure (mark matched, move no money).
+
+> **Shadow agreement cannot catch a routing mistake between two categories that share a resolution
+> procedure.** It watches actions, and the actions are identical.
+
+Defence unchanged and adequate: both categories already carry the lowest money cap in the policy
+(§F/T2), for exactly this reason.
+
+**Negative control 2 — corrupt the recording.**
+
+```text
+corrupted recordings 200   flagged 160 (80.0%)
+  extreme_value 40/40 · schema_drift_added 40/40 · schema_drift_missing 40/40 · type_change 40/40
+  unseen_enum    0/40
+```
+
+Four of five classes caught completely at the Phase 14 threshold of 100. The survivor is
+`unseen_enum` — **the exact class Phase 14 predicted would survive**, because those fields are
+free-form strings with no learned domain to violate. Two phases, two setups, the same blind spot.
+
+**A fault in my own control, again.** The first version ran `retried` too and printed `0 of 40
+flagged`, which reads as forty missed divergences. It is not: `retried` leaves the result identical and
+only raises the attempt count, and **a replayed step is attempted exactly once**, so there was nothing
+to detect. Dropped with the reason recorded. Same shape as Phase 14's no-op mutator, so the rule is
+now explicit: *before trusting any "X of N caught", check that all N were detectable at all.*
+
+**Deliberately not done.** (a) `dry_run` left as-is — it is a label meaning "not connected to a real
+rail", shadow safety does not rest on it, and renaming it touches frozen trajectory and ledger
+contracts for no gain here. Recorded so nobody later mistakes it for enforcement. (b) Shadow runs pick
+the plan by **true category, not the classifier** — mixing in Phase 13's 62% would measure two things
+at once, so **these rates assume perfect routing**; the combined number is Phase 16. (c) Shadow mode
+runs from recorded traffic in a batch, not beside a live request path. Standing caveat: the live agent
+is the offline stand-in, so every number is `research grade: False`.
+
+**Tests first:** a shadowing plan cannot run under active authority and an active plan cannot run under
+shadow authority; a boundary that can act, or that declares nothing, is refused; playback returns the
+recording and never invents a result; the gate-derived idempotency key is ignored when matching; an
+extra read by the live agent is not a disagreement; every escalation reason has a shadow name and none
+of them is `NONE`; an observation cannot both agree and name a disagreement.
+
+**Measurable result:** shadow agreement rate per plan, disagreement reasons, and a lifecycle
+reconstructed from the ledger alone.
 
 ### Phase 16 — Full evaluation + minimal demo · `TODO`
 
