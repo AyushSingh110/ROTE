@@ -1048,10 +1048,131 @@ of them is `NONE`; an observation cannot both agree and name a disagreement.
 **Measurable result:** shadow agreement rate per plan, disagreement reasons, and a lifecycle
 reconstructed from the ledger alone.
 
-### Phase 16 — Full evaluation + minimal demo · `TODO`
+### Phase 16 — Full evaluation · `DONE` (2026-08-23)
 
-**Measurable result:** all seven metrics from `ARCHITECTURE.md` §I computed from one JSONL run
-log, plus the skeleton-agreement-across-models result (§I.8).
+All seven §I metrics computed **offline from a JSONL run log**, plus §I.8. The runner reads its own
+log back before rendering, so a number absent from the log cannot appear in the report; a line that
+fails validation **raises** rather than being skipped, because a skipped line silently shrinks the
+denominator. New eighth import contract: **nothing the evaluator measures may import the evaluator.**
+
+**Setup.** Plans compiled from 1,500 exceptions (seed 5, 70/30 split), each earning `ACTIVE` the
+Phase 15 way — shadow runs on the holdout, then a named human. Evaluated on 500 unseen exceptions
+(seed 91). Both arms run the same 500 tasks against their own copy of the same world.
+
+**⚠ The headline is a negative result, and §I.6 required it to be reportable.**
+
+```text
+I.6 ACCURACY AGAINST THE CODE-ONLY CHECKER
+  tasks compared on both paths   500
+  Rote passed                    440
+  live agent passed              500
+
+                     agent PASS   agent FAIL
+    Rote PASS               440            0
+    Rote FAIL                60            0
+```
+
+**Compiling the procedure cost accuracy.** Rote never wins a case the agent loses and loses 60 the
+agent wins.
+
+**Why those exact 60, provably.** Every one is a `partial_payment` classified as `fee_mismatch`;
+every other category is classified perfectly. This is not tuning:
+`_PRECONDITIONS[FEE_MISMATCH] is _PRECONDITIONS[PARTIAL_PAYMENT]` — **the same function object**,
+both meaning "same currency, bank paid less than expected". A classifier reading only structured
+fields **cannot** separate them; the priority order (declared before running anything) decides
+*which* group fails, not *whether* one does. Fee-first costs 60; partial-first would cost 124. A test
+asserts the shared predicate and the resulting unreachability. **This is the thesis arriving as a
+failure rather than a success:** what separates the two is the merchant writing "customer paid half
+now" in free text, and Phase 16 puts a price on it — 60 wrong postings.
+
+**⚠ The finding that matters most.** How the 60 failed, and what the safety layers saw:
+
+```text
+  status_mismatch              60   "status is matched, expected partially_settled"
+  adjustment_reason_mismatch   60   "posted fee, expected shortfall"
+  guard objected on any step: {False: 60}
+```
+
+Both categories compile to the **identical skeleton**
+(`get_settlement_record -> get_fee_schedule -> post_adjustment -> mark_settlement_matched`), so the
+results had the expected shape and in-range values. The gate **permitted** (within cap); the guard
+**passed** (structure and values normal); the precondition **held** (a partial payment genuinely is a
+same-currency shortfall); the executor ran **deterministically** and **replayed identically**.
+
+> **Every safety mechanism worked exactly as designed and the system was still confidently wrong
+> sixty times.** None of them catches a category that is wrong but plausible — they reason about
+> shape and range, and the error was in meaning.
+
+**New risk, belongs in the §F table:** a misclassification also **hands over the misclassified
+category's spending limit**. These ran against the `fee_mismatch` cap (INR 40,000) instead of the
+partial-payment cap (INR 20,000) that §F/T2 set lower for exactly this case. The cap defence is only
+as strong as the label it keys on.
+
+**The rest of the measurements.**
+
+```text
+I.1 DETERMINISTIC RESOLUTION RATE
+  resolved by compiled code, 0 model calls  500 / 500 (100.0%)   escalated 0   failed 0
+                  classification calls    post-classification calls
+    Rote                           500                            0
+    live agent                       0                         2150
+
+I.2 CONSISTENCY OVER 20 IDENTICAL REPEATS
+  cohort                        cases  repeats  one outcome  most distinct    rate
+  compiled, slot-free              10       20           10              1  100.0%
+  live agent                       10       20           10              1  100.0%
+  live agent, exploring            10       20            0             13    0.0%
+
+I.3 ESCALATIONS — nothing escalated on either path
+
+I.5 AUDIT REPLAY FIDELITY
+  plan-lifecycle ledger 18 entries valid: True   money-movement ledger 3254 entries valid: True
+  500 / 500 compiled resolutions reproduced the outcome hash and the derived gate keys
+
+I.7 COST AND LATENCY
+  path             runs  median calls  p95 calls  median ms   p95 ms
+  rote              500             1          1         14       17
+  live_agent        500             5          5          4       19
+
+I.8 SKELETON AGREEMENT — 6 of 6 categories identical across quiet and detour-taking recordings
+```
+
+764 tests passed (32 new) · ruff clean · `mypy --strict` clean over 120 files · import-linter 8/8.
+
+**Honest readings of those rows.** (a) The `live agent 100.0%` consistency row is an artefact: the
+stand-in is a deterministic rule-follower with exploration off. The meaningful comparison is the
+third row — **1 outcome versus up to 13 across 20 runs**. (b) **No plan contains a slot**, so §I.2's
+middle cohort is genuinely empty — the `FROM_SLOT` escape hatch was designed and never needed.
+(c) An empty escalation table combined with 60 wrong answers is the **worst shape**: not cautious and
+wrong but confident and wrong. (Escalation is not untested — Phase 7 measured 171 hand-offs under
+caps; nothing in this eval set trips them.) (d) **Rote is 3× slower here and the number is
+meaningless**: in-memory tools and a zero-cost stand-in mean only the compiled path's real work shows
+up. Tokens are 0 on both sides, so **token cost is not measurable** and no figure is presented.
+(e) **The ledger can verify a replay but cannot reconstruct one** — it stores a result hash and a
+derived key, never the arguments.
+
+**§I.8 is the weaker version and is labelled as such.** The real question is whether a *different
+model* yields the same skeleton; there is one stand-in, so this compares quiet against detour-taking
+recordings of the same model. It shows the procedure survives recording noise, **not** that it is
+independent of the model. The strong version remains the most valuable experiment left undone.
+
+**Conclusions the evidence forces.** (a) Categories whose resolutions differ must be distinguishable
+**before** compilation, or be merged into one plan that derives the adjustment from the data.
+(b) The guard cannot be the safety net for a routing error — it is looking at the wrong thing.
+(c) The money cap must key on something a misclassification cannot change.
+
+**Deliberately not done.** No UI or demo server: A3 made it optional, no new dependency was added,
+and `fastapi`/`jinja2` stay deferred. **Standing caveat:** both the agent and the classifier are
+stand-ins, so every number is `research grade: False` — a measurement of the mechanism, not evidence
+about language models.
+
+**Tests first:** the run log round-trips and a malformed or unknown-field line raises rather than
+being skipped; an escalation without a reason and a resolution *with* one are both refused at the
+boundary; a task missing from one path is refused rather than dropped; `UNDETERMINED` counts as
+neither pass nor fail; the three consistency cohorts are never blurred; the two shared-predicate
+categories are proven inseparable and the later one unreachable.
+
+**Measurable result:** all seven §I metrics plus §I.8, computed from one JSONL run log.
 
 ---
 
@@ -1069,6 +1190,8 @@ Approved in `ARCHITECTURE.md` §H. Installed now, pinned in `environment.yml`:
 | `ruff`, `mypy` | required quality gates | — |
 | `import-linter` | mechanically enforces §G dependency direction | no stdlib equivalent |
 
-Deferred, to be requested when the phase needs them: `scikit-learn` (Phase 9, tier-1 rules only),
-`fastapi` + `jinja2` (Phase 16), and any hosted/local model client (Phase 5 — the test suite uses
-an offline fake and must keep working with no API key).
+Deferred and, at the end of the sprint, **never requested**: `scikit-learn` (Phase 9 proved a
+decision tree cannot represent `a - b`, so it was the wrong tool rather than merely unnecessary),
+`fastapi` + `jinja2` (the Phase 16 demo UI was optional under A3 and was not built), and any
+hosted/local model client (the test suite runs offline with no API key, which is why every number
+in this project carries `research grade: False`).

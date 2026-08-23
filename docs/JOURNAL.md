@@ -3096,3 +3096,266 @@ that difference, but I have not built it, and I should not claim I have.
 
 **Standing caveat:** the live agent is the offline stand-in, so every number here is
 `research grade: False`.
+
+---
+
+## 2026-08-23 — Session 19: Phase 16, the full evaluation, and the number that says I was wrong
+
+### The rule for this phase
+
+Report what the measurements say. Do not adjust anything after seeing them.
+
+I want to put the important result at the top rather than build up to it, because burying it would
+be the exact failure this phase exists to avoid.
+
+> **Rote resolved 500 of 500 exceptions deterministically, replayed all 500 identically, and got
+> 60 of them wrong. The live agent got all 500 right.**
+
+Compiling the procedure cost accuracy. §I.6 says in writing: *"Must be equal or better. If
+compilation costs accuracy, the idea fails, and that has to be reportable."* So here it is,
+reported.
+
+The rest of this entry is what the numbers are, and — more usefully — exactly **why** those 60
+failed, because the cause is precise and it is not what I would have guessed.
+
+### How the numbers are produced
+
+Every metric is computed **offline from a JSONL run log**, not printed live and trusted. The
+harness runs both arms and writes one line per exception; the report then reads the file back and
+computes from that. The runner literally reads its own log before rendering, so a number that is
+not in the log cannot appear in the report.
+
+Every line is validated on the way back in. A log line that fails validation **raises**, rather
+than being skipped — a skipped line would silently shrink the denominator, which is how a bad
+number gets to look like a good one.
+
+There is also a new import rule: **nothing the evaluator measures may import the evaluator.** Eight
+contracts now, all kept. The evaluation harness may reach into everything; nothing may reach back.
+
+### The setup
+
+- Plans compiled from **1,500** exceptions on seed 5, split 70/30, then made to earn `ACTIVE` the
+  Phase 15 way: shadow runs on the holdout, then a named human signs off. All six reached `ACTIVE`.
+- Evaluated on **500** exceptions from seed 91 — a different seed, never seen.
+- Both arms run the **same 500 tasks against their own copy of the same world**, so the comparison
+  is like for like.
+
+### I.1 — Deterministic resolution rate
+
+```text
+exceptions                               500
+resolved by compiled code, 0 model calls 500  (100.0%)
+resolved by the live agent instead         0
+escalated                                  0
+failed                                     0
+
+                classification calls    post-classification calls
+  Rote                           500                            0
+  live agent                       0                         2150
+```
+
+**One bounded classification call each, against 2,150 unbounded tool-selection calls.** That shape
+is the actual claim, and it is more honest than the percentage: Rote is not "zero LLM", it is
+*one call that cannot choose a tool* instead of *four or five that can*.
+
+### I.2 — Consistency over 20 identical repeats
+
+```text
+cohort                        cases  repeats  one outcome  most distinct    rate
+compiled, slot-free              10       20           10              1  100.0%
+live agent                       10       20           10              1  100.0%
+live agent, exploring            10       20            0             13    0.0%
+```
+
+Read the middle row sceptically. **The live agent scores 1.0 only because the stand-in is a
+deterministic rule-follower** — with exploration off it has no randomness at all, so of course it
+repeats itself. Reporting that as "agents are consistent" would be nonsense.
+
+The third row is the one that means something. Turn the stand-in's variability on and the same
+exception produces **up to 13 different outcomes across 20 runs**, and not one of the ten cases
+repeats itself even once. That is the comparison: 1 outcome versus 13.
+
+**No plan contains a slot**, so the middle cohort of §I.2 is empty. The `FROM_SLOT` escape hatch was
+designed and never needed — worth saying plainly rather than leaving a gap in the table.
+
+### I.3 — Escalations
+
+```text
+Rote:        nothing escalated
+live agent:  nothing escalated
+```
+
+An empty table, and combined with the accuracy result it is the **worst possible shape**: the
+system was not cautious and wrong, it was **confident and wrong**. Sixty times it did the wrong
+thing and handed off to nobody.
+
+(Escalation machinery is not untested — Phase 7 measured 171 honest hand-offs when the money caps
+bit, and Phase 15's controls fired every escalation class. Nothing in *this* eval set trips them.)
+
+### I.6 — Accuracy against the code-only checker
+
+```text
+tasks compared on both paths   500
+Rote passed                    440
+live agent passed              500
+
+                   agent PASS   agent FAIL
+  Rote PASS               440            0
+  Rote FAIL                60            0
+```
+
+The only-Rote cell is empty and the only-agent cell holds 60. **Rote never wins a case the agent
+loses, and loses 60 the agent wins.**
+
+### Why those exact 60 — and it is not a bug
+
+Every one of the 60 is a **partial payment classified as a fee mismatch**:
+
+```text
+duplicate_entry       -> duplicate_entry        43
+fee_mismatch          -> fee_mismatch          124
+fx_rounding           -> fx_rounding            75
+partial_payment       -> fee_mismatch           60   <-- every one
+timing_cutoff         -> timing_cutoff         109
+transposed_reference  -> transposed_reference    89
+```
+
+Everything else is classified perfectly. And this one is **not a tuning failure — it is provable**:
+
+> The precondition for `fee_mismatch` and the precondition for `partial_payment` are the **same
+> function object**. `_PRECONDITIONS[FEE_MISMATCH] is _PRECONDITIONS[PARTIAL_PAYMENT]`.
+
+Both mean "same currency, bank paid less than we expected". A classifier that reads only structured
+fields therefore **cannot** separate them — whichever I list first always wins, and the other becomes
+unreachable. There is a test asserting exactly that. The ordering I declared (before running
+anything) decides *which* group fails, not *whether* one does: fee first costs 60 wrong, partial
+first would have cost 124.
+
+**This is the thesis, arriving as a failure instead of a success.** What distinguishes a partial
+payment from a fee shortfall is the merchant writing *"customer paid half now"* in free text. The
+numbers cannot tell you. Phase 13 said this in words; Phase 16 puts a price on it: **60 wrong
+postings.**
+
+### The part that genuinely troubles me
+
+I checked how the 60 fail, and what the safety layers saw:
+
+```text
+partial_payment exceptions routed to the fee_mismatch plan : 60
+  status_mismatch              60   "status is matched, expected partially_settled"
+  adjustment_reason_mismatch   60   "posted fee, expected shortfall"
+guard objected on any step: {False: 60}
+```
+
+**The guard objected zero times out of sixty.** And it was right not to: the two categories compile
+to the *identical skeleton*
+
+```text
+get_settlement_record -> get_fee_schedule -> post_adjustment -> mark_settlement_matched
+```
+
+so the results had the expected shape, the amounts sat inside the learned ranges, and every field
+held a value the guard had seen before. The plan did a textbook fee-mismatch resolution, perfectly.
+It was simply the wrong resolution.
+
+So, laid out plainly:
+
+- the policy gate **permitted** it — within cap
+- the guard **passed** it — structure and values entirely normal
+- the precondition check **held** — a partial payment genuinely *is* a same-currency shortfall
+- the executor ran it **deterministically** and it **replayed identically**
+
+> **Every safety mechanism in this system worked exactly as designed, and the system was still
+> confidently wrong sixty times.** None of them is built to catch a category that is wrong but
+> plausible, because all of them reason about *shape and range*, and the error was in *meaning*.
+
+And one more thing I had not thought through until I read the numbers: **a misclassification also
+hands over the misclassified category's spending limit.** These cases were routed as
+`fee_mismatch`, so they were checked against the fee cap (INR 40,000) rather than the partial-payment
+cap (INR 20,000) that §F/T2 deliberately set lower for exactly this sort of case. The cap defence is
+only ever as strong as the label it keys on. That belongs in the risk table, not in a footnote.
+
+### I.5 — Audit replay fidelity
+
+```text
+plan-lifecycle ledger      18 entries   chain valid: True
+money-movement ledger    3254 entries   chain valid: True
+compiled resolutions replayed  500
+reproduced the same outcome    500 (100.0%)
+reproduced the same gate keys  500
+```
+
+Both chains verify, and every one of the 500 compiled resolutions re-executed to a byte-identical
+`outcome_hash` and derived the identical gate-owned idempotency keys.
+
+One honest limit found while building this: **the ledger can verify a replay but cannot reconstruct
+one.** It stores a result hash and a derived key, never the arguments. So you can prove a replay
+matches, but you cannot rebuild the run from the ledger alone — you need the trajectory store too.
+Worth knowing before anyone calls it a complete audit trail.
+
+### I.7 — Cost and latency, last and least
+
+```text
+path             runs  median calls  p95 calls  median ms   p95 ms
+rote              500             1          1         14       17
+live_agent        500             5          5          4       19
+```
+
+**Rote is three times slower per exception here, and that number is meaningless.** The tools are
+in-memory dictionaries and the stand-in model costs nothing, so the compiled path's real work —
+classification, binding resolution, guard checks — is all that shows up, while the agent's model
+calls are free. With a real model at hundreds of milliseconds a call, 1 call against 5 is the number
+that decides it. Tokens are 0 on both sides because the stand-in reports none, so **token cost is
+simply not measurable here** and I will not present a made-up figure.
+
+### I.4 — Divergence curve
+
+Computed in Phase 14 by the offline sweep over stored score vectors, unchanged: at the approved
+threshold of 500 the guard missed **9,633 of 9,633** labelled divergences; the selected threshold of
+100 misses 2,061 (21.3%) with 0 false aborts. Phase 15's corruption control agreed with it
+independently — 4 of 5 classes caught completely, `unseen_enum` surviving, exactly as predicted.
+
+### I.8 — Skeleton agreement
+
+```text
+categories compared 6   same skeleton 6
+```
+
+The real §I.8 asks whether a **different model** produces the same skeleton, and I have only one
+stand-in, so I ran the honest weaker version: record the same tasks twice, once with the agent taking
+random detours through the decoy tools, and compare. All six skeletons identical.
+
+That says the procedure survives noise in the recording. **It does not say the procedure is
+independent of the model**, and I will not claim it does. The strong version needs a second model
+and remains the single most valuable experiment left undone.
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 764 passed (732 before, 32 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 120 source files |
+| import-linter | 8 contracts kept, 0 broken |
+
+### What I would say if asked whether this worked
+
+The mechanism works and the numbers are unambiguous about it: one classification call instead of
+five tool-selection calls, one outcome across twenty runs where the agent produces thirteen, 100%
+replay fidelity, every action through a gate that cannot be bypassed, every plan signed off by a
+named human after shadow evidence.
+
+**And the compiled system is less accurate than the agent it learned from**, for one reason I can
+state exactly and prove with a test: two of my six categories are indistinguishable from structured
+data, and the compiled path has to commit to a category before it starts while the agent never has
+to commit at all.
+
+That is a real limitation of the design as built, not a bug I can patch, and the honest conclusions
+are: (a) categories whose resolutions differ must be distinguishable **before** you compile them, or
+they must be merged into one plan that decides the adjustment from the data; (b) the guard cannot be
+the safety net for a routing error, because it is looking at the wrong thing; (c) the money cap must
+be keyed on something a misclassification cannot change.
+
+**Standing caveat, for the last time:** both the agent and the classifier are stand-ins I wrote.
+Every number in this phase is `research grade: False` — a measurement of the mechanism, not evidence
+about language models.

@@ -130,3 +130,18 @@ name = "runtime does not depend on the offline compiler"
 type = "forbidden"
 source_modules = ["rote.runtime"]
 forbidden_modules = ["rote.compiler"]
+
+[[tool.importlinter.contracts]]
+name = "nothing the evaluator measures may import the evaluator"
+type = "forbidden"
+source_modules = [
+    "rote.contracts",
+    "rote.safety",
+    "rote.domain",
+    "rote.recorder",
+    "rote.compiler",
+    "rote.runtime",
+    "rote.agent",
+    "rote.observability",
+]
+forbidden_modules = ["rote.eval"]
