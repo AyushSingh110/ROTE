@@ -3359,3 +3359,161 @@ be keyed on something a misclassification cannot change.
 **Standing caveat, for the last time:** both the agent and the classifier are stand-ins I wrote.
 Every number in this phase is `research grade: False` — a measurement of the mechanism, not evidence
 about language models.
+
+---
+
+## 2026-08-23 — Session 20: Rote v2 — the system learns to refuse
+
+### What this session changed
+
+One rule, ten lines, in the router. Everything else is untouched.
+
+> **If more than one category's precondition fits the evidence, do not run a compiled plan. Hand
+> the case to the live agent and say which categories fit.**
+
+The measured cost: automation falls from 100% to **36.8%**. The measured benefit: wrong resolutions
+fall from **60 to 0**.
+
+### How we got here, honestly, including the parts that were wrong
+
+Phase 16 found the regression. What followed was five experiments, each one killing the hypothesis
+the previous one had raised.
+
+| Step | Result | What it eliminated |
+|---|---|---|
+| Phase 16 | Rote 440/500, agent 500/500, **60 wrong** | — |
+| Fee-schedule distance | 184/184 and 554/554 — looked perfect | nothing yet |
+| Margin stability, 5 seeds | **36 → 6 → 0**, a real collision at distance 0 | any tolerance on the fee gap |
+| Merchant notes, 3 seeds, 15,000 cases | independent of category, max obs/exp 1.24 | **any text classifier, including a real LLM** |
+| E-A settlement status | **constant `unmatched`** in every category | the cheapest hypothesis of all |
+| E-B shortfall fraction | ranges overlap; 58.1% of partials inside the fee range | the last cheap deterministic signal |
+
+**Conclusion: within this domain's pre-action evidence, a partial payment and a fee shortfall are
+the same event.** No amount of model quality changes that, because there is nothing to read.
+
+### The claim I have to retract
+
+In Phase 13 and again in Phase 16 I wrote that what separates a partial payment from a fee is
+*"the merchant writing 'customer paid half now' in free text."*
+
+**That is withdrawn.** I never tested it. Three seeds and 15,000 exceptions say the note text is
+independent of the true category — the partial-payment-sounding note lands on partial payments
+slightly *below* chance. Phase 13's 62% measurement stands, because it read structured fields only.
+The explanation I attached to it was wrong.
+
+Nothing is being deleted. The failed experiments stay in the record because each one eliminated
+something, and the elimination is the result.
+
+### The prediction I got wrong, and by how much
+
+Before implementing I predicted 316 compiled / 184 escalated. **It is exactly the other way round.**
+
+I had assumed `fee_mismatch + partial_payment` was the only pair whose preconditions co-hold. It
+is not. Measuring first — before writing any code — found two more:
+
+```text
+fee_mismatch + partial_payment          184
+timing_cutoff + transposed_reference      89
+timing_cutoff + duplicate_entry           43
+                        ambiguous total  316
+timing_cutoff alone                      109
+fx_rounding alone                         75
+                      unambiguous total  184
+```
+
+The coincidence that both totals are 184 is what hid the mistake from me. **Only two of six
+categories are unambiguous.**
+
+*The lesson, and it is the same one as the no-op mutator and the fake collision control: I keep
+predicting from the case I already know about. Measuring the impact before writing the code cost
+five minutes and caught an inverted prediction that would otherwise have shown up as a "surprise"
+in the results.*
+
+### What the rule deliberately does not do
+
+It does **not** name `fee_mismatch` or `partial_payment`. It counts. A test asserts that no category
+name appears anywhere in `router.py`.
+
+That matters: special-casing the pair that failed would fit the rule to the one failure we happened
+to find, and the two collisions we found *by measuring* prove there would have been others. The
+generic rule catches all three without knowing about any of them.
+
+The honest cost: 132 of the 316 refusals (89 transposed-reference + 43 duplicate-entry) are cases
+Rote resolves **correctly** today. We give them up anyway, because from the evidence alone those
+cases genuinely could be something else, and mistaking a duplicate for a timing case means failing
+to void a duplicated bank line. The router's existing comment already said this was the trade:
+*"a wrong 'live' costs money, a wrong 'plan' costs correctness, and the second is never traded for
+the first."*
+
+### Measured: v1 against v2
+
+Same generator, same seed, same classifier, same preconditions, same guard, same compiler, same
+executor, same gate, same ledger, same harness. **The router rule is the only difference.**
+
+| metric | v1 | v2 |
+|---|---|---|
+| total | 500 | 500 |
+| compiled | 500 | **184** |
+| refused to automate | 0 | **316** |
+| correct | 440 | **500** |
+| **wrong** | **60** | **0** |
+| automation | 100% | **36.8%** |
+| accuracy | 88.0% | **100%** |
+
+Prediction met exactly: 184 / 316 / 0.
+
+**A distinction I do not want blurred.** The 316 are *refusals to automate*, not failures — Rote
+hands them to the live agent, which resolves them. In run-log terms `terminal_state = resolved_live`
+and `escalated = 0`. Both numbers are true and they measure different things: Rote refused to
+automate 316 times, and nothing was left unresolved.
+
+**And the cost side, which is real:** Rote v2 makes 500 classification calls plus 1,448
+tool-selection calls by the fallback agent, against the live agent's 2,150. The "one bounded call
+instead of five" claim now applies to 36.8% of traffic, not all of it. Replay fidelity is 184/184.
+
+### Safety, verified on all 316
+
+```text
+all kind == LIVE_AGENT                  True
+all plan_id is None                     True
+all record the co-holding categories    True
+all details sorted                      True
+plan source consulted                   184  (exactly the compiled cases)
+route is JSON-serialisable              True
+identical on a second pass              True
+violations                              none
+```
+
+The last one in that list is the one worth pausing on. Because ambiguity is checked **before** the
+registry lookup, an ambiguous case never consults the plan source at all — the plan source was
+touched exactly 184 times, once per compiled case. **There is no path by which an ambiguous case
+can reach a plan**, which is a stronger property than "we checked and refused".
+
+### Where we are
+
+| Gate | Result |
+|---|---|
+| pytest | 842 passed (826 before, 16 new) |
+| ruff | all checks passed |
+| mypy --strict | no issues in 128 source files |
+| import-linter | 8 contracts kept, 0 broken |
+
+### One thing that had to be preserved before touching the code
+
+Once the router refuses, `run_evaluation` produces v2 and **can no longer reproduce v1**. The v1
+run log now lives in `docs/baselines/phase16_v1/` with checksums, so the regression stays checkable
+rather than merely quoted. Three existing router tests were re-fixtured from `fee_mismatch` to
+`fx_rounding` — same assertions, unambiguous fixture. One of them would otherwise have kept passing
+while testing nothing, which is worse than failing.
+
+### The product position
+
+> **Rote automates only when the evidence is sufficient to compile a deterministic, auditable
+> workflow. When two categories with different resolutions are indistinguishable from the available
+> evidence, Rote escalates instead of guessing.**
+
+We deliberately sacrificed 63.2% of automation coverage to eliminate confident wrong actions.
+That is the product, not a compromise in it.
+
+**Standing caveat:** the agent and classifier are stand-ins, so every number here is
+`research grade: False`.

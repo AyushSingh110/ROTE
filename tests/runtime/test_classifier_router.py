@@ -230,11 +230,12 @@ class TestCategoryPreconditions:
 
 class TestTheRouterDoesNoReasoning:
     def test_a_confident_supported_category_with_a_plan_routes_to_it(self) -> None:
-        router = router_with(ExceptionCategory.FEE_MISMATCH)
+        # fx_rounding is the unambiguous fixture: exactly one precondition holds on its facts
+        router = router_with(ExceptionCategory.FX_ROUNDING)
         route = router.route(
-            facts_for(ExceptionCategory.FEE_MISMATCH),
+            facts_for(ExceptionCategory.FX_ROUNDING),
             Classification(
-                category=ExceptionCategory.FEE_MISMATCH,
+                category=ExceptionCategory.FX_ROUNDING,
                 confidence_per_mille=900,
                 model_id="m",
                 prompt_template_id="p",
@@ -283,9 +284,9 @@ class TestTheRouterDoesNoReasoning:
 
     def test_a_category_with_no_active_plan_goes_to_the_live_agent(self) -> None:
         route = router_with().route(
-            facts_for(ExceptionCategory.FEE_MISMATCH),
+            facts_for(ExceptionCategory.FX_ROUNDING),
             Classification(
-                category=ExceptionCategory.FEE_MISMATCH,
+                category=ExceptionCategory.FX_ROUNDING,
                 confidence_per_mille=900,
                 model_id="m",
                 prompt_template_id="p",
@@ -294,18 +295,18 @@ class TestTheRouterDoesNoReasoning:
         assert route.reason is RouteReason.NO_ACTIVE_PLAN
 
     def test_a_plan_that_is_not_active_is_never_served(self) -> None:
-        shadowing = a_plan(ExceptionCategory.FEE_MISMATCH).model_copy(
+        shadowing = a_plan(ExceptionCategory.FX_ROUNDING).model_copy(
             update={"status": PlanStatus.SHADOW}
         )
         router = Router(
-            plans=FakeRegistry({ExceptionCategory.FEE_MISMATCH: shadowing}),
+            plans=FakeRegistry({ExceptionCategory.FX_ROUNDING: shadowing}),
             domain=Domain.RECONCILIATION,
             min_confidence_per_mille=600,
         )
         route = router.route(
-            facts_for(ExceptionCategory.FEE_MISMATCH),
+            facts_for(ExceptionCategory.FX_ROUNDING),
             Classification(
-                category=ExceptionCategory.FEE_MISMATCH,
+                category=ExceptionCategory.FX_ROUNDING,
                 confidence_per_mille=900,
                 model_id="m",
                 prompt_template_id="p",
@@ -402,3 +403,141 @@ class TestHandover:
         handoff = build_handoff(handover, original_untrusted=())
         assert handoff.untrusted == ()
         assert handoff.resumed_from_step == 2
+
+
+class SpyRegistry:
+    def __init__(self, plans: dict[ExceptionCategory, Plan]) -> None:
+        self._plans = plans
+        self.lookups: list[ExceptionCategory] = []
+
+    def active_for(self, domain: Domain, category: ExceptionCategory) -> Plan | None:
+        del domain
+        self.lookups.append(category)
+        return self._plans.get(category)
+
+
+def classified(category: ExceptionCategory, confidence: int = 900) -> Classification:
+    return Classification(
+        category=category,
+        confidence_per_mille=confidence,
+        model_id="m",
+        prompt_template_id="p",
+    )
+
+
+def holding_count(category: ExceptionCategory) -> int:
+    facts = facts_for(category)
+    return sum(1 for other in GENERATED_CATEGORIES if precondition_holds(other, facts))
+
+
+class TestAmbiguousEvidenceIsRefused:
+    # the whole point of the rule: it is generic, not a special case for the pair that failed
+    def test_the_rule_names_no_category_at_all(self) -> None:
+        source = (RUNTIME_PACKAGE / "router.py").read_text(encoding="utf-8")
+        for category in GENERATED_CATEGORIES:
+            assert category.value not in source
+
+    def test_exactly_one_matching_category_still_reaches_the_plan(self) -> None:
+        assert holding_count(ExceptionCategory.FX_ROUNDING) == 1
+        route = router_with(ExceptionCategory.FX_ROUNDING).route(
+            facts_for(ExceptionCategory.FX_ROUNDING), classified(ExceptionCategory.FX_ROUNDING)
+        )
+        assert route.kind is RouteKind.COMPILED_PLAN
+        assert route.reason is RouteReason.PLAN_MATCHED
+
+    @pytest.mark.parametrize(
+        "category",
+        [
+            ExceptionCategory.FEE_MISMATCH,
+            ExceptionCategory.PARTIAL_PAYMENT,
+            ExceptionCategory.TRANSPOSED_REFERENCE,
+            ExceptionCategory.DUPLICATE_ENTRY,
+        ],
+    )
+    def test_two_matching_categories_go_to_the_live_agent(
+        self, category: ExceptionCategory
+    ) -> None:
+        assert holding_count(category) > 1
+        route = router_with(category).route(facts_for(category), classified(category))
+        assert route.kind is RouteKind.LIVE_AGENT
+        assert route.reason is RouteReason.AMBIGUOUS_EVIDENCE
+
+    def test_zero_matching_categories_keeps_the_contradiction_reason(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            {}, classified(ExceptionCategory.FEE_MISMATCH)
+        )
+        assert route.reason is RouteReason.PRECONDITION_CONTRADICTION
+
+    def test_the_co_holding_categories_are_recorded_sorted(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.FEE_MISMATCH),
+        )
+        named = [part.strip() for part in route.detail.split(",")]
+        assert named == sorted(named)
+        assert named == ["fee_mismatch", "partial_payment"]
+
+    # contradiction is the injection defence and must keep priority over ambiguity
+    def test_ambiguity_is_checked_after_contradiction(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            facts_for(ExceptionCategory.FX_ROUNDING),
+            classified(ExceptionCategory.FEE_MISMATCH),
+        )
+        assert route.reason is RouteReason.PRECONDITION_CONTRADICTION
+
+    def test_a_missing_plan_cannot_override_ambiguity(self) -> None:
+        route = router_with().route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.FEE_MISMATCH),
+        )
+        assert route.reason is RouteReason.AMBIGUOUS_EVIDENCE
+
+    def test_an_ambiguous_case_never_carries_a_plan_to_execute(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.FEE_MISMATCH),
+        )
+        assert route.plan_id is None
+        assert route.plan_version is None
+        assert route.kind is RouteKind.LIVE_AGENT
+
+    # decided before the registry is consulted, so an ambiguous case cannot reach a plan at all
+    def test_an_ambiguous_case_never_consults_the_plan_source(self) -> None:
+        category = ExceptionCategory.FEE_MISMATCH
+        registry = SpyRegistry({category: a_plan(category)})
+        router = Router(plans=registry, domain=Domain.RECONCILIATION, min_confidence_per_mille=600)
+        router.route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.FEE_MISMATCH),
+        )
+        assert registry.lookups == []
+
+    def test_an_unambiguous_case_does_consult_the_plan_source(self) -> None:
+        category = ExceptionCategory.FX_ROUNDING
+        registry = SpyRegistry({category: a_plan(category)})
+        router = Router(plans=registry, domain=Domain.RECONCILIATION, min_confidence_per_mille=600)
+        router.route(
+            facts_for(ExceptionCategory.FX_ROUNDING), classified(ExceptionCategory.FX_ROUNDING)
+        )
+        assert registry.lookups == [ExceptionCategory.FX_ROUNDING]
+
+    def test_ambiguous_routing_is_deterministic(self) -> None:
+        router = router_with(ExceptionCategory.FEE_MISMATCH)
+        facts = facts_for(ExceptionCategory.FEE_MISMATCH)
+        classification = classified(ExceptionCategory.FEE_MISMATCH)
+        routes = [router.route(facts, classification) for _ in range(5)]
+        assert all(route == routes[0] for route in routes)
+
+    def test_low_confidence_still_outranks_ambiguity(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.FEE_MISMATCH, confidence=100),
+        )
+        assert route.reason is RouteReason.LOW_CONFIDENCE
+
+    def test_an_unknown_category_still_outranks_ambiguity(self) -> None:
+        route = router_with(ExceptionCategory.FEE_MISMATCH).route(
+            facts_for(ExceptionCategory.FEE_MISMATCH),
+            classified(ExceptionCategory.UNKNOWN),
+        )
+        assert route.reason is RouteReason.UNKNOWN_CATEGORY

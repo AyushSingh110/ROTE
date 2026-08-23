@@ -21,6 +21,8 @@ class RouteReason(StrEnum):
     UNKNOWN_CATEGORY = "unknown_category"
     LOW_CONFIDENCE = "low_classifier_confidence"
     PRECONDITION_CONTRADICTION = "precondition_contradiction"
+    # more than one procedure fits the same evidence, so the evidence does not choose one
+    AMBIGUOUS_EVIDENCE = "ambiguous_evidence"
     NO_ACTIVE_PLAN = "no_plan"
 
 

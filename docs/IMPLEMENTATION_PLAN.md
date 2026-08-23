@@ -1176,6 +1176,115 @@ categories are proven inseparable and the later one unreachable.
 
 ---
 
+## 6. Post-evaluation: Rote v2 — ambiguity refuses automation · `DONE` (2026-08-23)
+
+Not a phase. A single bounded change after the research closed, with its evidence.
+
+### The research chain, and what each step eliminated
+
+| Step | Result | Eliminated |
+|---|---|---|
+| Phase 16 | Rote 440/500, agent 500/500, **60 wrong** — all `partial_payment` routed to `fee_mismatch` | — |
+| Fee-schedule distance | 184/184 and 554/554 separated — appeared perfect | nothing yet |
+| Margin stability (5 seeds, n→5000) | worst margin **36 → 6 → 0**; a true partial payment at distance **0** | any tolerance-based fee rule |
+| Merchant notes (seeds 5/91/202, 15,000 cases) | independent of category; max obs/exp **1.24** on notes seen 100+ times; 0 notes concentrated | **any text classifier, including a real LLM** |
+| **E-A** settlement status | **constant `unmatched`** across all six categories, all three seeds | the cheapest hypothesis available |
+| **E-B** shortfall fraction (bps) | fee `[180,744]` sits **inside** partial `[22,3601]`; **58.1%** of partials inside the fee range | the last cheap deterministic signal |
+
+**Conclusion: within this domain's pre-action evidence, `fee_mismatch` and `partial_payment` are not
+separable.** Research frozen. E-C not run; no model added.
+
+**⚠ Retraction.** Phase 13 and Phase 16 both stated that merchant free text is what distinguishes the
+two categories. **That claim is withdrawn** — it was never tested and three seeds contradict it.
+Phase 13's 62% measurement stands (structured fields only); the explanation attached to it was wrong.
+
+### Newly discovered collision classes
+
+The earlier prediction of **184 ambiguous cases was wrong**; the measured figure is **316**. Two
+collisions had not been considered:
+
+```text
+fee_mismatch + partial_payment          184      <- the known pair
+timing_cutoff + transposed_reference      89      <- new
+timing_cutoff + duplicate_entry           43      <- new
+                        ambiguous total  316
+timing_cutoff alone                      109
+fx_rounding alone                         75
+                      unambiguous total  184
+```
+
+Stable at 63.0–63.2% ambiguous across seeds 5, 91 and 202. **Only `timing_cutoff` and `fx_rounding`
+are unambiguous.**
+
+### The change
+
+`RouteReason` gains `AMBIGUOUS_EVIDENCE` (additive; no existing value altered; no exhaustive `match`
+over the enum exists anywhere). `Router.route` counts how many allowed categories' preconditions fit
+the evidence and refuses the compiled path when more than one does.
+
+Order preserved and pinned by test:
+`UNKNOWN → LOW_CONFIDENCE → PRECONDITION_CONTRADICTION → AMBIGUOUS_EVIDENCE → NO_ACTIVE_PLAN → compiled`
+
+**Generic by construction.** The rule counts; it names no category. A test asserts no category value
+appears in `router.py` at all. Special-casing the Phase 16 pair would have fitted the rule to the one
+failure we found — and the two collisions found by measuring prove there would have been others.
+
+Untouched: compiler, executor, guard, gate, ledger, registry, classifier, preconditions, shadow
+runner, evaluation harness, generator. No dependency added.
+
+### Measured — v1 against v2
+
+Same generator, seed, classifier, preconditions, guard, compiler, executor, gate, ledger and harness.
+**The router rule is the only difference.**
+
+| metric | v1 | v2 |
+|---|---|---|
+| total | 500 | 500 |
+| compiled | 500 | **184** |
+| refused to automate | 0 | **316** |
+| correct | 440 | **500** |
+| **wrong** | **60** | **0** |
+| automation | 100% | **36.8%** |
+| accuracy | 88.0% | **100%** |
+| replay fidelity | 500/500 | 184/184 |
+
+Prediction met exactly (184 / 316 / 0). **Terminology:** the 316 are *refusals to automate*; the live
+agent then resolves them, so run-log `terminal_state = resolved_live` and `escalated = 0`. Nothing is
+left unresolved.
+
+**Honest cost.** Rote v2 makes 500 classification calls plus **1,448** fallback tool-selection calls,
+against the live agent's 2,150. The "one bounded call instead of five" claim now covers 36.8% of
+traffic, not all of it. And **132 of the 316 refusals are cases Rote resolves correctly today**
+(89 transposed-reference + 43 duplicate-entry) — given up because from the evidence alone they could
+genuinely be something else.
+
+### Safety property, verified on all 316
+
+Ambiguity is decided **before** the registry lookup, so the plan source was consulted exactly 184
+times — once per compiled case. **There is no path by which an ambiguous case can reach a plan.**
+All 316: `LIVE_AGENT`, `plan_id is None`, co-holding categories recorded and sorted, JSON
+serialisable, identical on a second pass, zero violations.
+
+### v1 preserved
+
+`run_evaluation` now produces v2 and can no longer reproduce v1, so the v1 run log is checked in at
+`docs/baselines/phase16_v1/` with `SHA256SUMS.txt`. Three router tests were re-fixtured from
+`fee_mismatch` to `fx_rounding` — assertions unchanged, unambiguous fixture; one would otherwise have
+kept passing while testing nothing.
+
+842 tests passed (16 new) · ruff clean · `mypy --strict` clean over 128 files · import-linter 8/8.
+
+### The product position
+
+> **Rote automates only when the evidence is sufficient to compile a deterministic, auditable
+> workflow. When two categories with different resolutions are indistinguishable from the available
+> evidence, Rote escalates instead of guessing.**
+
+Rote v2 deliberately sacrifices automation coverage when the evidence supports multiple incompatible
+procedures. Standing caveat: `research grade: False`.
+
+---
+
 ## 5. Dependencies, and why each is here
 
 Approved in `ARCHITECTURE.md` §H. Installed now, pinned in `environment.yml`:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rote.contracts.classifier import Classification
-from rote.contracts.common import Domain, ExceptionCategory
+from rote.contracts.common import GENERATED_CATEGORIES, Domain, ExceptionCategory
 from rote.contracts.plan import PlanStatus
 from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
 from rote.runtime.preconditions import precondition_holds
@@ -32,6 +32,13 @@ class Router:
                 f"the structured fields do not support {category.value}",
             )
 
+        fitting = _fitting_categories(facts)
+        if len(fitting) > 1:
+            return _live(
+                RouteReason.AMBIGUOUS_EVIDENCE,
+                ", ".join(member.value for member in fitting),
+            )
+
         plan = self._plans.active_for(self._domain, category)
         if plan is None or plan.status is not PlanStatus.ACTIVE:
             return _live(RouteReason.NO_ACTIVE_PLAN, f"nothing active for {category.value}")
@@ -42,6 +49,17 @@ class Router:
             plan_version=plan.version,
             detail=category.value,
         )
+
+
+# generic on purpose: naming the pairs that failed in Phase 16 would fit the rule to the one
+# failure we happened to find. Sorted so the recorded detail is identical on every run.
+def _fitting_categories(facts: dict[str, Any]) -> tuple[ExceptionCategory, ...]:
+    return tuple(
+        sorted(
+            (member for member in GENERATED_CATEGORIES if precondition_holds(member, facts)),
+            key=lambda member: member.value,
+        )
+    )
 
 
 def _live(reason: RouteReason, detail: str) -> Route:
