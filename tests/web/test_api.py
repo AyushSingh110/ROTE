@@ -213,3 +213,66 @@ class TestResolvingOverHttp:
         assert response.status_code == 200
         assert "Traceback" not in response.text
         assert "valid" in response.text
+
+
+class TestPresentationAffordances:
+    def test_health_reports_readiness(self, client: TestClient) -> None:
+        body = client.get("/health").json()
+        assert body["ready"] is True
+        assert body["research_grade"] is False
+        assert body["backlog"] > 0
+        assert body["ledger_valid"] is True
+
+    def test_the_landing_page_answers_the_product_questions(self, client: TestClient) -> None:
+        page = client.get("/").text
+        for phrase in (
+            "direct authority to move money",
+            "authority layer between AI reasoning and financial actions",
+            "Does exactly one procedure fit the evidence",
+            "AUTOMATE",
+            "REFUSE AUTOMATION",
+            "research grade: False",
+        ):
+            assert phrase in page, f"landing page is missing: {phrase}"
+
+    def test_the_landing_page_carries_the_v1_v2_result(self, client: TestClient) -> None:
+        page = client.get("/").text
+        for number in ("500", "184", "36.8%", "88.0%", "100%", "60"):
+            assert number in page
+        assert "deliberate, not a regression" in page
+
+    def test_the_three_scenarios_are_offered(self, client: TestClient) -> None:
+        page = client.get("/").text
+        assert "Scenario A" in page and "Scenario B" in page and "Scenario C" in page
+        for target in ("/s/automated/", "/s/ambiguous/", "/s/schema_drift/"):
+            assert target in page
+
+    def test_demo_mode_is_labelled_on_every_page(self, client: TestClient) -> None:
+        for path in ("/", "/queue", "/ledger", "/s/ambiguous/decision"):
+            assert "DEMO MODE" in client.get(path).text
+
+    def test_reset_restores_a_clean_session(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        client.post("/api/resolve", json={"exception_id": target})
+        assert client.get("/api/ledger").json()["total"] > 0
+
+        body = client.post("/api/reset").json()
+        assert body["reset"] is True
+        assert body["ledger_entries"] == 0
+        assert client.get("/api/ledger").json()["total"] == 0
+        assert client.get("/api/world").json()["adjustments"] == 0
+        assert client.get("/api/ledger").json()["valid"] is True
+
+    def test_reset_leaves_the_backlog_intact(self, client: TestClient) -> None:
+        before = client.get("/api/backlog").json()["total"]
+        client.post("/api/reset")
+        assert client.get("/api/backlog").json()["total"] == before
+
+    def test_a_case_can_be_resolved_again_after_reset(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        client.post("/api/resolve", json={"exception_id": target})
+        client.post("/api/reset")
+        again = client.post("/api/resolve", json={"exception_id": target}).json()
+        assert again["already_resolved"] is False
+        assert again["decision"] == "automate"
+        assert again["world_changed"] is True

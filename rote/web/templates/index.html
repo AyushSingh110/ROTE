@@ -1,41 +1,117 @@
 {% extends "base.html" %}
 {% block content %}
 
+<div class="panel hero">
+  <p class="lede">AI agents can reason about financial exceptions.<br>
+    <strong>The dangerous part is giving that reasoning direct authority to move money.</strong></p>
+  <p class="sub">Rote is an authority layer between AI reasoning and financial actions. It decides
+    when an AI-generated procedure has earned deterministic authority &mdash; and refuses to
+    automate when the evidence is ambiguous.</p>
+</div>
+
 <div class="panel">
-  <h2>The question this system answers</h2>
-  <p style="margin:0;font-size:17px">Not <em>&ldquo;can an agent solve this?&rdquo;</em> &mdash;
-    it usually can. The question is
-    <strong>&ldquo;is the evidence strong enough to let a deterministic procedure act
-    unsupervised?&rdquo;</strong></p>
-  <div class="fits" style="margin-top:14px">
-    <span class="chip">0 procedures fit &rarr; live agent</span>
-    <span class="chip">1 procedure fits &rarr; compiled plan may run</span>
-    <span class="chip on">2+ procedures fit &rarr; refuse to automate</span>
+  <h2>How a case flows</h2>
+  <div class="flow">
+    <div class="node">AI agent<span>resolves the exception, repeatedly</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="node accent">Rote<span>compiles what it did, then guards the authority to repeat it</span></div>
+    <div class="arrow">&darr;</div>
+    <div class="node question">Does exactly one procedure fit the evidence?</div>
+    <div class="branch">
+      <div class="leg yes">
+        <span class="legtag">YES</span>
+        <ol>
+          <li>validated deterministic plan</li>
+          <li>Guard checks the proposal and the result</li>
+          <li>Gate checks allowlist, cap, idempotency</li>
+          <li>execute &middot; write the ledger</li>
+        </ol>
+        <span class="pill automate">AUTOMATE</span>
+      </div>
+      <div class="leg no">
+        <span class="legtag">NO</span>
+        <ol>
+          <li>no plan is fetched</li>
+          <li>nothing executes</li>
+          <li>nothing is written</li>
+          <li>a human is told which procedures compete</li>
+        </ol>
+        <span class="pill escalate">REFUSE AUTOMATION</span>
+      </div>
+    </div>
   </div>
 </div>
 
 <div class="panel">
-  <h2>Two hero flows</h2>
-  <div class="cards">
-    {% for spec in specs[:2] %}
-      <a class="card" href="/s/{{ spec.id.value }}/investigation">
-        <span class="id">{{ spec.id.value.replace('_', ' ') }}</span>
-        <h3>{{ spec.title }}</h3>
-        <p>{{ spec.question }}</p>
-      </a>
-    {% endfor %}
+  <h2>Three scenarios &mdash; run them yourself</h2>
+  <div class="cards three">
+    <a class="card" href="/s/automated/investigation">
+      <span class="id">Scenario A</span>
+      <h3>Evidence is sufficient</h3>
+      <p>One procedure fits. Validated, shadowed, human-approved, then executed with zero model
+        calls &mdash; and it replays byte for byte.</p>
+      <span class="pill automate">AUTOMATE</span>
+    </a>
+    <a class="card hero-card" href="/s/ambiguous/investigation">
+      <span class="id">Scenario B &middot; the safety case</span>
+      <h3>Evidence is insufficient</h3>
+      <p>Two procedures fit the same facts and they do different things with money. Rote never
+        fetches a plan. Nothing runs.</p>
+      <span class="pill escalate">REFUSE AUTOMATION</span>
+    </a>
+    <a class="card" href="/s/schema_drift/decision">
+      <span class="id">Scenario C</span>
+      <h3>The world changes underneath</h3>
+      <p>A valid, approved plan meets a bank response that has changed shape. The Guard rejects
+        the result before it can become state.</p>
+      <span class="pill escalate">REFUSE AUTOMATION</span>
+    </a>
   </div>
+  <p class="note"><a href="/queue">Or open the live queue &rarr;</a> &mdash; 500 real exceptions,
+    pick any one, watch it decide.</p>
+</div>
+
+<div class="panel research">
+  <h2>The research result this design is built on</h2>
+  <div class="scroll">
+    <table class="compare">
+      <tr>
+        <th>500 exceptions, same seed</th>
+        <th>v1 &mdash; automate whenever a plan exists</th>
+        <th>v2 &mdash; refuse when evidence is ambiguous</th>
+      </tr>
+      <tr><td>automated</td><td class="num">500</td><td class="num">184</td></tr>
+      <tr><td>automation coverage</td><td class="num">100%</td><td class="num">36.8%</td></tr>
+      <tr><td>accuracy</td><td class="num">88.0%</td><td class="num">100%</td></tr>
+      <tr class="headline">
+        <td><strong>confidently wrong</strong></td>
+        <td class="num"><strong>60</strong></td>
+        <td class="num"><strong>0</strong></td>
+      </tr>
+    </table>
+  </div>
+  <p><strong>The drop in automation is deliberate, not a regression.</strong> v1 automated every
+    case and was wrong sixty times &mdash; and every safety layer passed those sixty: the gate
+    permitted, the guard passed, the precondition held, execution was deterministic and the replay
+    was byte-identical. The error was in <em>meaning</em>, and none of those layers reasons about
+    meaning.</p>
+  <p>Five pre-registered experiments then failed to find any way to separate the ambiguous cases
+    from evidence available before acting &mdash; fee arithmetic, its stability as data grew,
+    merchant notes, settlement status, and the shortfall fraction. So we stopped looking for a
+    tie-breaker and changed the policy instead.</p>
+  <p class="closing">We gave up 63% of automation coverage to remove every confident wrong action.
+    That trade is the product.</p>
 </div>
 
 <div class="panel">
-  <h2>Adversarial strip &mdash; input, defence, decision</h2>
+  <h2>Every defence, shown by running it</h2>
   <div class="scroll">
     <table class="strip">
       <tr><th>Input</th><th>Defence that fired</th><th>Decision</th><th>Evidence</th></tr>
       {% for spec, caption, defence, res in adversarial %}
       <tr>
         <td>{{ caption }}</td>
-        <td class="flow">{{ defence }}</td>
+        <td class="flow-cell">{{ defence }}</td>
         <td>
           <span class="pill {{ res.decision.decision.value }}">
             {% if res.decision.decision.value == 'automate' %}AUTOMATED{% else %}REFUSED{% endif %}
@@ -51,52 +127,23 @@
       {% endfor %}
     </table>
   </div>
-  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">Each row is produced by running the
-    scenario, not written by hand. The cap-breach scenario runs with the per-action cap lowered to
-    1 minor unit so the boundary is reachable on stage.</p>
+  <p class="note">Each row is produced by running the scenario, not written by hand. The cap-breach
+    row runs with the per-action cap lowered to 1 minor unit so the boundary is reachable on
+    stage.</p>
 </div>
 
-<div class="panel">
-  <h2>What we measured, including the result that went against us</h2>
-  <div class="scroll">
-    <table>
-      <tr><th>500 exceptions, same seed</th><th>v1 &mdash; automate whenever a plan exists</th>
-        <th>v2 &mdash; refuse when evidence is ambiguous</th></tr>
-      <tr><td>automated</td><td class="num">{{ baselines.v1.automated }}</td>
-        <td class="num">{{ baselines.v2.automated }}</td></tr>
-      <tr><td>refused automation</td><td class="num">{{ baselines.v1.refused }}</td>
-        <td class="num">{{ baselines.v2.refused }}</td></tr>
-      <tr><td>correct</td><td class="num">{{ baselines.v1.correct }}</td>
-        <td class="num">{{ baselines.v2.correct }}</td></tr>
-      <tr><td><strong>confidently wrong</strong></td>
-        <td class="num"><strong>{{ baselines.v1.wrong }}</strong></td>
-        <td class="num"><strong>{{ baselines.v2.wrong }}</strong></td></tr>
-      <tr><td>automation coverage</td><td class="num">{{ baselines.v1.coverage }}</td>
-        <td class="num">{{ baselines.v2.coverage }}</td></tr>
-    </table>
-  </div>
-  <p style="margin:14px 0 0">v1 automated everything and was <strong>wrong 60 times</strong>. Every
-    safety layer passed those cases: the gate permitted, the guard passed, the precondition held,
-    execution was deterministic and the replay was byte-identical. The error was in
-    <em>meaning</em>, and none of those layers reasons about meaning.</p>
-  <p style="margin:8px 0 0">Five experiments then failed to find any way to separate the two
-    categories from the evidence available before acting &mdash; fee arithmetic, its stability
-    across sample sizes, merchant notes, settlement status, and the shortfall fraction. So we
-    stopped looking and changed the policy instead.</p>
-  <p class="closing">We gave up 63% of automation coverage to remove every confident wrong action.
-    That trade is the product.</p>
-</div>
-
-<div class="panel">
-  <h2>Honest limits</h2>
-  <ul style="margin:0;padding-left:20px;color:#5b6472">
-    <li>The world, the agent and the classifier are all stand-ins written for this project.
-      <strong>research grade: False</strong> &mdash; no number here is evidence about real
-      reconciliation or about language models.</li>
-    <li>Rote v2 is <em>level</em> with the agent on accuracy, never better. It trades coverage for
-      the removal of confident errors.</li>
-    <li>Identities such as <span class="mono">human:ops-lead-42</span> are a convention. No
-      authentication is built.</li>
+<div class="panel limits">
+  <h2>What this is not</h2>
+  <ul>
+    <li><strong>research grade: False.</strong> The world, the agent and the classifier are
+      stand-ins written for this project. No number here is evidence about real reconciliation or
+      about language models.</li>
+    <li><strong>Rote is level with the agent on accuracy, never better</strong> &mdash; 500/500
+      each. It trades coverage for the removal of confident errors.</li>
+    <li><strong>Not production.</strong> No payment rail, no bank, no external API, no credentials.
+      The only mutation boundary is an in-memory simulated world.</li>
+    <li><strong>No authentication.</strong> <span class="mono">human:ops-lead-42</span> is a naming
+      convention for the approver, nothing more.</li>
   </ul>
 </div>
 

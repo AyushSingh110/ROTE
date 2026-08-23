@@ -8,15 +8,17 @@
 </head>
 <body>
   <div class="banner">
-    <span>{{ banner }}</span>
+    <span><span class="mode">DEMO MODE</span> &nbsp;{{ banner }}</span>
     <span>Synthetic domain &middot; stand-in agent &middot; <b>no real payment rail</b></span>
   </div>
 
   <header class="masthead">
     <h1><a href="/" style="text-decoration:none;color:inherit">Rote</a>
       {% block subtitle %}{% endblock %}</h1>
-    <p>{% block strapline %}A reliability layer that decides when agent behaviour has earned
-      deterministic authority.{% endblock %}</p>
+    <p>{% block strapline %}An authority layer between AI reasoning and financial
+      actions.{% endblock %}</p>
+    <p class="topnav"><a href="/">Overview</a> &middot; <a href="/queue">Live queue</a> &middot;
+      <a href="/ledger">Ledger</a></p>
   </header>
 
   <main>

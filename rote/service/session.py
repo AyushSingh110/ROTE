@@ -607,6 +607,13 @@ def live_session() -> SessionRuntime:
     return SessionRuntime(system=compiled_system(), dataset=demo_dataset())
 
 
+# a fresh world, gate, ledger and resolved-case cache for the next rehearsal. The compiled
+# system and the dataset are reused, so this costs no recompilation and grants no authority.
+def reset_session() -> SessionRuntime:
+    live_session.cache_clear()
+    return live_session()
+
+
 __all__ = [
     "BacklogItem",
     "InvestigationDetail",
@@ -616,4 +623,5 @@ __all__ = [
     "SessionRuntime",
     "WorldView",
     "live_session",
+    "reset_session",
 ]

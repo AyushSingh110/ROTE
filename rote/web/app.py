@@ -20,7 +20,12 @@ from rote.service.scenario import (
     ScenarioResult,
     run_scenario,
 )
-from rote.service.session import ResolutionView, SessionRuntime, live_session
+from rote.service.session import (
+    ResolutionView,
+    SessionRuntime,
+    live_session,
+    reset_session,
+)
 
 HERE = Path(__file__).parent
 BANNER = "Offline prototype — research grade: False"
@@ -48,6 +53,7 @@ def _resolve(scenario_id: str) -> ScenarioId:
 
 
 QUEUE_PAGE = 60
+_READY: dict[str, float] = {}
 
 
 class ResolveRequest(BaseModel):
@@ -64,9 +70,17 @@ def warmup() -> float:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # compile once at startup so no judge waits for it mid-presentation
+    # compile once at startup so no presenter waits for it mid-demonstration. The port does not
+    # accept connections until this finishes, so "it answers" is the readiness signal.
+    _logger.info("warmup_started", note="compiling plans; the server is not serving yet")
     elapsed = warmup()
-    _logger.info("warmup_complete", seconds=round(elapsed, 2), scenarios=len(ScenarioId))
+    _READY["seconds"] = round(elapsed, 2)
+    _logger.info(
+        "warmup_complete",
+        seconds=_READY["seconds"],
+        scenarios=len(ScenarioId),
+        note="READY - open http://127.0.0.1:8000/",
+    )
     yield
 
 
@@ -153,6 +167,29 @@ def create_app() -> FastAPI:
         return page(
             request, "ledger.html", ledger=runtime.ledger_view(), world=runtime.world_view()
         )
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        runtime = session()
+        return {
+            "ready": True,
+            "warmup_seconds": _READY.get("seconds"),
+            "scenarios": len(ScenarioId),
+            "backlog": len(runtime.backlog()),
+            "ledger_entries": len(runtime.ledger.entries),
+            "ledger_valid": runtime.ledger_view().valid,
+            "research_grade": False,
+        }
+
+    @app.post("/api/reset")
+    def reset() -> dict[str, Any]:
+        runtime = reset_session()
+        return {
+            "reset": True,
+            "backlog": len(runtime.backlog()),
+            "ledger_entries": len(runtime.ledger.entries),
+            "world_hash": runtime.world_view().world_hash,
+        }
 
     @app.get("/api/backlog")
     def api_backlog() -> dict[str, Any]:
