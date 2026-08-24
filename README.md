@@ -54,6 +54,10 @@ Does exactly one procedure fit the evidence?
 earned the authority to be repeated deterministically, without a model in the loop and without a
 human watching each time.
 
+**The claim, stated narrowly:** Rote removes the human review step for the slice it can prove is
+unambiguous — and tells you exactly how big that slice is. It is *level* with the agent on accuracy,
+never better. What it changes is whether a person has to check each action.
+
 Concretely, Rote records what the agent did across many verified runs, compiles the repeated
 procedure into a typed plan with **no language model in it**, validates that plan against held-out
 recordings, runs it in shadow with no authority, requires a named human to sign it off — and then, at
@@ -148,6 +152,42 @@ each), never better. The finding is:
 Synthetic deterministic environment · offline stand-in agent and classifier · not production
 accuracy · `research_grade = False`.
 
+### Then we attacked our own result
+
+Refusing on ambiguity handles a *wrong label*. It says nothing about *wrong evidence*. So we ran two
+further pre-registered attacks on the system.
+
+**Upstream classification errors — contained.** Five error classes (wrong category, plausible-wrong,
+unknown, low-confidence, contradictory), 500 cases each, injected outside every safety mechanism.
+**Zero acquired authority.** Not by luck: if exactly one category fits the evidence it is always the
+true one, so a wrong label is either contradicted or ambiguous. There is no third door.
+
+**Evidence corruption — it escaped.** When we corrupted the *evidence* rather than the label,
+**345 wrong automated actions** got through: 75 from a one-minor-unit amount change, 43 from a
+reference substitution, 227 from evidence rewritten to fit a different category. Every layer passed
+them. The finding:
+
+> **Rote validated the interpretation of evidence but had no mechanism to validate the evidence
+> itself.**
+
+**The fix was already in the building.** `get_settlement_record` runs as step 0 of every plan — its
+authoritative result was fetched and then used for nothing, because the argument binder prefers
+`FROM_INPUT` over `FROM_STEP` whenever both match. Re-reading the record and bank lines *through the
+Policy Gate*, before routing, detected **345 of 345** with a **0% false-mismatch rate on clean data**
+and clean coverage unchanged at 36.8%.
+
+| corruption rate | wrong actions, verification **off** | **on** | coverage cost |
+|---|---|---|---|
+| 0% | 0 | **0** | 0.0 pp |
+| 5% | 1 | **0** | 1.0 pp |
+| 10% | 5 | **0** | 2.4 pp |
+| 20% | 8 | **0** | 3.6 pp |
+
+Verification costs coverage only in proportion to how much evidence is actually corrupted. It
+roughly doubles per-case latency and triples audit-trail volume, and it writes **no financial intent
+or outcome when automation is refused**. It ships behind `ROTE_VERIFY_EVIDENCE`, off by default, so
+the frozen v2 result stays exactly reproducible.
+
 ## Live demo
 
 The repository contains a complete local end-to-end demo.
@@ -231,8 +271,8 @@ Watch for `warmup_complete … note="READY"` in the console, or poll:
 
 ```bash
 curl -s http://127.0.0.1:8000/health
-# {"ready":true,"warmup_seconds":51.69,"scenarios":6,"backlog":500,
-#  "ledger_entries":0,"ledger_valid":true,"research_grade":false}
+# {"ready":true,"warmup_seconds":46.22,"scenarios":6,"backlog":500,
+#  "ledger_entries":0,"ledger_valid":true,"research_grade":false,"verify_evidence":false}
 ```
 
 Then open **http://127.0.0.1:8000/**
@@ -268,6 +308,9 @@ Each of these is enforced by code and pinned by tests:
 - **Evaluation baselines are immutable**, checked by SHA-256 in the test suite.
 - **The runtime cannot import evaluation code** — enforced by import-linter contracts, not
   convention.
+- **Evidence can be re-read against the authoritative record before authority is granted**
+  (optional), with every read passing the same Policy Gate under actor `system:verifier` — an AST
+  test fails the build if any component calls an adapter directly.
 
 ## Evaluation
 
@@ -306,6 +349,17 @@ The live runtime reproduces the v2 result exactly through an entirely different 
   deployment one.
 - **Startup warmup of ~52 seconds.**
 - **No claim of production-level accuracy.** Rote is level with the agent, never better.
+- **The biggest unknown is coverage, not safety.** 36.8% is a property of six synthetic categories
+  we wrote — only two of which are unambiguous. We have never established that a real exception
+  queue (the residue *after* a rules engine) contains a meaningful unambiguous slice. If it is
+  mostly ambiguous, Rote refuses nearly everything. That is a data question, and no further building
+  answers it.
+- **"Authoritative" means an independent *path*, not an independent *source*.** In this prototype the
+  world and the evidence both come from one generator. A real deployment would read a genuinely
+  separate system of record.
+- **Nothing in the system reasons about meaning.** Every layer checks shape, range, allowlist or cap.
+  That is precisely why the 60 errors got through, and why the answer was to refuse rather than to
+  add a sixth checker.
 
 ## Project status
 
@@ -314,12 +368,14 @@ environment. **It is not production-ready financial infrastructure.**
 
 ## Roadmap
 
-1. Real financial-system integration behind the Gate.
-2. Real agent and model evaluation (the second-model skeleton-agreement experiment remains undone).
-3. Production authentication and approval workflows.
-4. Persistent state and audit storage.
-5. Larger and real-world datasets.
-6. Stronger second-model evaluation.
+1. **A pre-deployment coverage report** — point it at an exception queue and get back "this
+   fraction has exactly one fitting procedure." It answers the biggest open question and is the
+   artifact a pilot would start from.
+2. Real financial-system integration behind the Gate, with a genuinely separate system of record.
+3. Real agent and model evaluation (the second-model skeleton-agreement experiment remains undone).
+4. Durable ledger and trajectory storage; concurrency and durable idempotency.
+5. Production authentication and approval workflows.
+6. Larger and real-world datasets.
 
 ## Development
 
@@ -330,6 +386,10 @@ conda run -n rote ruff format --check .
 conda run -n rote mypy --strict rote tests
 conda run -n rote lint-imports              # 11 architectural contracts
 ```
+
+**Running the demo yourself:** [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) covers setup, warmup,
+health checks, reset, troubleshooting, the five-minute script, the judge Q&A and the claims never to
+make. [`docs/DEMO_CHEAT_SHEET.md`](docs/DEMO_CHEAT_SHEET.md) is the one-page version.
 
 Design decisions and the full experimental record live in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
