@@ -22,11 +22,12 @@ from rote.contracts.plan import Plan, PlanStep
 from rote.contracts.policy import ExecutionPath, PolicyConfig, PolicyContext
 from rote.contracts.reconciliation import GeneratedDataset, ReconciliationException
 from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
-from rote.contracts.tools import ToolSpec
+from rote.contracts.tools import Toolbox, ToolSpec
 from rote.domain.generators.divergence import DivergenceLabel, inject
 from rote.domain.tools.adapters import ReconciliationTools
 from rote.runtime.classifier import Classifier
 from rote.runtime.classifier_rules import StructuredFieldsClassifier
+from rote.runtime.evidence_check import VerificationOutcome, VerificationResult, verify
 from rote.runtime.executor import execute_plan
 from rote.runtime.guard import Guard, default_guard_config
 from rote.runtime.preconditions import precondition_holds
@@ -217,7 +218,10 @@ class SessionRuntime:
         dataset: GeneratedDataset,
         policy: PolicyConfig | None = None,
         classifier_model: ClassifierModel | None = None,
+        verify_evidence: bool = False,
     ) -> None:
+        # off by default so the frozen V2 path stays exactly reproducible
+        self.verifies_evidence = verify_evidence
         self._dataset = dataset
         self._exceptions = {e.exception_id: e for e in dataset.exceptions}
         self._adapters = ReconciliationTools.from_snapshot(dataset.world)
@@ -315,6 +319,18 @@ class SessionRuntime:
         facts = exception.facts.model_dump(mode="json")
         before_hash = self.world_view().world_hash
         before_entries = len(self.ledger.entries)
+
+        # the evidence is checked against the authoritative record BEFORE the router runs, so a
+        # refusal here never reaches a plan lookup. Every read goes through the same gate.
+        if self.verifies_evidence:
+            checked = verify(exception.facts, self._verification_boundary(exception_id))
+            if checked.outcome is not VerificationOutcome.AGREEMENT:
+                view = self._evidence_refusal(
+                    exception_id, checked, facts, before_hash, before_entries
+                )
+                self._resolved[exception_id] = view
+                return view
+
         classification, route, spy = self._route(exception, facts)
         fitting = _fitting(facts)
 
@@ -465,6 +481,71 @@ class SessionRuntime:
             min_confidence_per_mille=DEFAULT_MIN_CONFIDENCE_PER_MILLE,
         )
         return classification, router.route(facts, classification), spy
+
+    # a read-only, category-free boundary: the gate's category=None rule allows exactly the
+    # read tools, and no write tool is reachable from here
+    def _verification_boundary(self, exception_id: str) -> Toolbox:
+        return self.gate.for_task(
+            PolicyContext(
+                task_id=exception_id,
+                correlation_id=f"{exception_id}:verification",
+                path=self.execution_path,
+                category=None,
+                actor="system:verifier",
+            )
+        )
+
+    def _evidence_refusal(
+        self,
+        exception_id: str,
+        checked: VerificationResult,
+        facts: dict[str, Any],
+        before_hash: str,
+        before_entries: int,
+    ) -> ResolutionView:
+        mismatched = checked.outcome is VerificationOutcome.MISMATCH
+        reason = RouteReason.EVIDENCE_MISMATCH if mismatched else RouteReason.EVIDENCE_UNVERIFIABLE
+        fields = checked.mismatched_fields if mismatched else checked.unverifiable_fields
+        detail = ", ".join(fields)
+        headline = (
+            f"The evidence disagrees with the authoritative record: {detail}."
+            if mismatched
+            else f"The evidence could not be confirmed against the record: {detail}."
+        )
+        after = self.world_view().world_hash
+        return ResolutionView(
+            exception_id=exception_id,
+            decision=Decision.ESCALATE,
+            headline=headline,
+            already_resolved=False,
+            classified_as="",
+            classifier_confidence_per_mille=0,
+            fitting_categories=_fitting(facts),
+            co_holding_categories=(),
+            route_kind=RouteKind.LIVE_AGENT,
+            route_reason=reason,
+            route_detail=detail,
+            plan_id=None,
+            plan_version=None,
+            plan_lookups=0,
+            compiled_steps_executed=0,
+            calls=(),
+            guard_inspections=0,
+            guard_objection="",
+            model_calls_classification=0,
+            model_calls_after_classification=0,
+            outcome="handed to the live agent",
+            outcome_hash="",
+            handover_reason=reason.value,
+            handover_step=None,
+            quarantined_result=None,
+            world_hash_before=before_hash,
+            world_hash_after=after,
+            world_changed=before_hash != after,
+            ledger_before=before_entries,
+            ledger_after=len(self.ledger.entries),
+            ledger_valid=bool(self.ledger.verify().valid),
+        )
 
     def _refusal(
         self,

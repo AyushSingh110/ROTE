@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from rote.contracts.errors import RoteError
 from rote.contracts.reconciliation import ReconciliationFacts
-from rote.domain.tools.adapters import ReconciliationTools
+from rote.contracts.tools import Toolbox
 
 FROZEN = ConfigDict(extra="forbid", frozen=True)
 SEARCH_WINDOW_DAYS = 5
@@ -40,7 +40,7 @@ class VerificationResult(BaseModel):
 
 # re-reads the same facts from the world through the existing read tools and compares them with
 # the evidence handed in. Exact equality only: no tolerance, no threshold, no model.
-def verify(facts: ReconciliationFacts, adapters: ReconciliationTools) -> VerificationResult:
+def verify(facts: ReconciliationFacts, adapters: Toolbox) -> VerificationResult:
     checks: list[FieldCheck] = []
     record = _read(adapters, "get_settlement_record", {"record_id": facts.record_id})
     if record is None:
@@ -76,9 +76,7 @@ def verify(facts: ReconciliationFacts, adapters: ReconciliationTools) -> Verific
 # the UNION of both authoritative queries, never one as a fallback for the other: a fallback
 # that fires only when the primary is empty can silently return a partial set, which is exactly
 # the defect the clean control exposed.
-def _authoritative_lines(
-    adapters: ReconciliationTools, record: dict[str, Any]
-) -> tuple[dict[str, Any], ...]:
+def _authoritative_lines(adapters: Toolbox, record: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     by_reference = _read(
         adapters, "list_bank_lines_for_reference", {"reference": record["reference"]}
     )
@@ -204,9 +202,7 @@ def _result(facts: ReconciliationFacts, checks: list[FieldCheck]) -> Verificatio
     )
 
 
-def _read(
-    adapters: ReconciliationTools, tool: str, payload: dict[str, Any]
-) -> dict[str, Any] | None:
+def _read(adapters: Toolbox, tool: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     try:
         return adapters.invoke(tool, payload)
     except RoteError:

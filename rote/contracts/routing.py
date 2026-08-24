@@ -23,6 +23,10 @@ class RouteReason(StrEnum):
     PRECONDITION_CONTRADICTION = "precondition_contradiction"
     # more than one procedure fits the same evidence, so the evidence does not choose one
     AMBIGUOUS_EVIDENCE = "ambiguous_evidence"
+    # the evidence itself disagrees with the authoritative record, or cannot be confirmed
+    # against it. Emitted by the verification boundary ahead of the router, never by the router.
+    EVIDENCE_MISMATCH = "evidence_mismatch"
+    EVIDENCE_UNVERIFIABLE = "evidence_unverifiable"
     NO_ACTIVE_PLAN = "no_plan"
 
 
