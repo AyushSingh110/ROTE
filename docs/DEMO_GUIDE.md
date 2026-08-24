@@ -25,6 +25,39 @@ conda run -n rote lint-imports               # expect Contracts: 11 kept, 0 brok
 
 If any of those fail, do not present — see §9.
 
+### Check the port first — this matters
+
+**Do this before starting.** Uvicorn runs the warmup *before* it binds the socket, so if the port is
+taken you wait through the full ~1 minute compile and only then see:
+
+```
+ERROR: [Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000):
+       only one usage of each socket address ... is normally permitted
+```
+
+Check first (Git Bash):
+
+```bash
+netstat -ano | grep ":8000 .*LISTENING"     # no output = free
+```
+
+If something is listening, **use another port** rather than killing a process you did not start:
+
+```bash
+conda run -n rote python -m uvicorn rote.web.app:app --host 127.0.0.1 --port 8001
+```
+
+Then use `http://127.0.0.1:8001/` everywhere below. To identify the occupant:
+
+```bash
+netstat -ano | grep ":8000 .*LISTENING"     # last column is the PID
+tasklist //FI "PID eq <PID>"
+curl -s -m 3 http://127.0.0.1:8000/health
+```
+
+**How to tell whether it is ours:** our health payload contains `research_grade` and
+`backlog:500`. Anything shorter — such as a bare `{"status":"ok"}` — is a different service.
+
 ### Start the server
 
 ```bash
@@ -486,7 +519,8 @@ Reset first. Speak plainly.
 | Symptom | Check | Fix |
 |---|---|---|
 | Server won't start | `conda run -n rote python -c "import fastapi"` | Wrong env — re-run with `-n rote` |
-| **Port already in use** | `netstat -ano \| grep ":8000 "` | Use `--port 8001` and open that instead. **Do not kill a PID you don't recognise.** |
+| **Port already in use** (`Errno 10048`) | `netstat -ano \| grep ":8000 .*LISTENING"` then `tasklist //FI "PID eq <PID>"` | Start on `--port 8001` and use that URL. **Do not kill a PID you did not start.** Note the error appears *after* warmup, so always check the port first. |
+| Something answers on 8000 but the demo looks wrong | `curl -s http://127.0.0.1:8000/health` | If the payload lacks `research_grade`/`backlog`, it is a different service — use another port |
 | Warmup seems stuck | Look for `warmup_started` in the console | Normal for 50–130s. The port is closed until it finishes — that is expected, not a hang. |
 | `/health` refuses connection | Is warmup finished? | Wait for `warmup_complete`, then retry |
 | `ready` is false or missing | You may be hitting a different service | Confirm the JSON has `"research_grade":false` — that is *our* health payload |

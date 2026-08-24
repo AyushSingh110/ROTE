@@ -52,8 +52,10 @@ refuses nearly everything.
 `/` problem → `/queue` judge picks → resolve → **ambiguous case, `plan lookups: 0`** → schema drift
 → `/ledger` → v1/v2 table → close.
 
-**Reset between runs:** `curl -X POST http://127.0.0.1:8000/api/reset`
+**Before starting:** `netstat -ano | grep ":8000 .*LISTENING"` — if occupied use `--port 8001`
+(the bind error appears *after* the ~1 min warmup, so check first)
 **Ready check:** `curl -s http://127.0.0.1:8000/health` → `ready:true, ledger_entries:0`
+**Reset between runs:** `curl -X POST http://127.0.0.1:8000/api/reset`
 
 ### Ten hardest questions, one line each
 
