@@ -276,3 +276,39 @@ class TestPresentationAffordances:
         assert again["already_resolved"] is False
         assert again["decision"] == "automate"
         assert again["world_changed"] is True
+
+
+class TestTheVerificationCandidateDefault:
+    def test_the_live_session_defaults_to_verification_off(self) -> None:
+        from rote.service.session import live_session
+
+        assert live_session().verifies_evidence is False
+
+    def test_it_can_be_switched_on_through_the_live_path(self) -> None:
+        from rote.service.session import live_session
+
+        verified = live_session(verify_evidence=True)
+        assert verified.verifies_evidence is True
+        assert verified is not live_session()
+
+    def test_the_environment_switch_selects_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from rote.web.app import verification_enabled
+
+        monkeypatch.delenv("ROTE_VERIFY_EVIDENCE", raising=False)
+        assert verification_enabled() is False
+        monkeypatch.setenv("ROTE_VERIFY_EVIDENCE", "1")
+        assert verification_enabled() is True
+        monkeypatch.setenv("ROTE_VERIFY_EVIDENCE", "0")
+        assert verification_enabled() is False
+
+    def test_health_reports_whether_verification_is_on(self, client: TestClient) -> None:
+        assert client.get("/health").json()["verify_evidence"] is False
+
+    def test_reset_preserves_the_verification_setting(self) -> None:
+        from rote.service.session import live_session, reset_session
+
+        verified = live_session(verify_evidence=True)
+        assert verified.verifies_evidence is True
+        again = reset_session(verify_evidence=True)
+        assert again.verifies_evidence is True
+        assert len(again.ledger.entries) == 0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -53,6 +54,14 @@ def _resolve(scenario_id: str) -> ScenarioId:
 
 
 QUEUE_PAGE = 60
+# candidate default, off unless explicitly switched on: the frozen V2 path stays reproducible
+VERIFY_ENV = "ROTE_VERIFY_EVIDENCE"
+
+
+def verification_enabled() -> bool:
+    return os.environ.get(VERIFY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 _READY: dict[str, float] = {}
 
 
@@ -64,7 +73,7 @@ def warmup() -> float:
     started = time.perf_counter()
     for scenario in ScenarioId:
         run_scenario(scenario)
-    live_session()
+    live_session(verification_enabled())
     return time.perf_counter() - started
 
 
@@ -124,7 +133,7 @@ def create_app() -> FastAPI:
         )
 
     def session() -> SessionRuntime:
-        return live_session()
+        return live_session(verification_enabled())
 
     def _known(exception_id: str) -> None:
         if exception_id not in {item.exception_id for item in session().backlog()}:
@@ -179,11 +188,12 @@ def create_app() -> FastAPI:
             "ledger_entries": len(runtime.ledger.entries),
             "ledger_valid": runtime.ledger_view().valid,
             "research_grade": False,
+            "verify_evidence": runtime.verifies_evidence,
         }
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
-        runtime = reset_session()
+        runtime = reset_session(verification_enabled())
         return {
             "reset": True,
             "backlog": len(runtime.backlog()),

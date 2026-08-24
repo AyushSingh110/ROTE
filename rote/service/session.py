@@ -687,16 +687,18 @@ def _clock() -> Callable[[], datetime]:
     return tick
 
 
-@functools.lru_cache(maxsize=1)
-def live_session() -> SessionRuntime:
-    return SessionRuntime(system=compiled_system(), dataset=demo_dataset())
+@functools.lru_cache(maxsize=2)
+def live_session(verify_evidence: bool = False) -> SessionRuntime:
+    return SessionRuntime(
+        system=compiled_system(), dataset=demo_dataset(), verify_evidence=verify_evidence
+    )
 
 
 # a fresh world, gate, ledger and resolved-case cache for the next rehearsal. The compiled
 # system and the dataset are reused, so this costs no recompilation and grants no authority.
-def reset_session() -> SessionRuntime:
+def reset_session(verify_evidence: bool = False) -> SessionRuntime:
     live_session.cache_clear()
-    return live_session()
+    return live_session(verify_evidence)
 
 
 __all__ = [
