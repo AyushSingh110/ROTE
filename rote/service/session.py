@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 from rote.bootstrap.system import CompiledSystem
 from rote.contracts.canonical import canonical_hash
+from rote.contracts.classifier import ClassifierModel
 from rote.contracts.common import (
     GENERATED_CATEGORIES,
     Currency,
@@ -215,6 +216,7 @@ class SessionRuntime:
         system: CompiledSystem,
         dataset: GeneratedDataset,
         policy: PolicyConfig | None = None,
+        classifier_model: ClassifierModel | None = None,
     ) -> None:
         self._dataset = dataset
         self._exceptions = {e.exception_id: e for e in dataset.exceptions}
@@ -227,7 +229,9 @@ class SessionRuntime:
             clock=_clock(),
         )
         self.registry = system.registry
-        self._model = StructuredFieldsClassifier()
+        # the upstream model is swappable so a different classifier can be measured against the
+        # same runtime; Rote treats every answer identically whatever produced it
+        self._model: ClassifierModel = classifier_model or StructuredFieldsClassifier()
         self._classifier = Classifier(model=self._model)
         self._resolved: dict[str, ResolutionView] = {}
 
