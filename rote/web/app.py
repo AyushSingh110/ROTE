@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
+from rote.bootstrap.evidence_corruption import EvidenceError
 from rote.observability.logging import get_logger
 from rote.service.scenario import (
     SCENARIOS,
@@ -67,6 +68,21 @@ _READY: dict[str, float] = {}
 
 class ResolveRequest(BaseModel):
     exception_id: str = Field(min_length=1)
+
+
+# the three demonstration controls, deliberately a closed set: no arbitrary mutation is exposed
+DEMO_CORRUPTIONS: tuple[tuple[EvidenceError, str], ...] = (
+    (EvidenceError.AMOUNT_OFF_BY_ONE, "Bank amount off by one minor unit"),
+    (EvidenceError.REFERENCE_SUBSTITUTION, "Bank reference replaced"),
+    (EvidenceError.CROSS_CATEGORY, "Evidence rewritten to fit another procedure"),
+)
+
+
+def _corruption(name: str) -> EvidenceError:
+    for error, _caption in DEMO_CORRUPTIONS:
+        if error.value == name:
+            return error
+    raise HTTPException(status_code=404, detail=f"no demo corruption {name!r}")
 
 
 def warmup() -> float:
@@ -162,7 +178,20 @@ def create_app() -> FastAPI:
             preview=runtime.preview(exception_id),
             resolution=runtime.resolution_for(exception_id),
             world=runtime.world_view(),
+            corruptions=DEMO_CORRUPTIONS,
         )
+
+    @app.post("/live/{exception_id}/corrupt/{corruption}")
+    def corrupt_case(exception_id: str, corruption: str) -> RedirectResponse:
+        _known(exception_id)
+        session().corrupt_case(exception_id, _corruption(corruption))
+        return RedirectResponse(url=f"/live/{exception_id}", status_code=303)
+
+    @app.post("/live/{exception_id}/restore")
+    def restore_case(exception_id: str) -> RedirectResponse:
+        _known(exception_id)
+        session().restore_case(exception_id)
+        return RedirectResponse(url=f"/live/{exception_id}", status_code=303)
 
     @app.post("/live/{exception_id}/resolve")
     def resolve_case(exception_id: str) -> RedirectResponse:

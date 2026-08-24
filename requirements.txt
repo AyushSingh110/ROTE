@@ -1,0 +1,10 @@
+# Pinned to the versions actually verified in the `rote` conda environment.
+# NOTE: pyproject.toml pins pydantic==2.9.2 but the environment resolved 2.13.4, which is what
+# the 1100+ test suite is green against. Reconcile before any real deployment.
+pydantic==2.13.4
+structlog==24.4.0
+tenacity==9.0.0
+SQLAlchemy==2.0.35
+fastapi==0.141.1
+jinja2==3.1.6
+uvicorn==0.52.4

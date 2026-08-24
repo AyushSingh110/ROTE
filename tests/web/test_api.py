@@ -312,3 +312,63 @@ class TestTheVerificationCandidateDefault:
         again = reset_session(verify_evidence=True)
         assert again.verifies_evidence is True
         assert len(again.ledger.entries) == 0
+
+
+class TestTheSandboxControls:
+    def test_the_live_page_shows_verification_and_procedures(self, client: TestClient) -> None:
+        first = client.get("/api/backlog").json()["items"][0]["exception_id"]
+        page = client.get(f"/live/{first}").text
+        assert "Evidence verification" in page
+        assert "authoritative record" in page.lower()
+        assert "Which procedures fit this evidence?" in page
+        assert "Demonstration controls" in page
+
+    def test_corrupting_and_restoring_round_trips(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        before = client.get(f"/live/{target}").text
+
+        posted = client.post(f"/live/{target}/corrupt/amount_off_by_one", follow_redirects=False)
+        assert posted.status_code == 303
+        after = client.get(f"/live/{target}").text
+        assert "amount_off_by_one" in after
+        assert after != before
+
+        client.post(f"/live/{target}/restore", follow_redirects=False)
+        assert "has been altered for this demonstration" not in client.get(f"/live/{target}").text
+
+    def test_only_the_three_demo_corruptions_are_reachable(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        for name in ("amount_off_by_one", "reference_substitution", "cross_category"):
+            assert (
+                client.post(f"/live/{target}/corrupt/{name}", follow_redirects=False).status_code
+                == 303
+            )
+        client.post(f"/live/{target}/restore", follow_redirects=False)
+        for name in ("missing_field", "unread_field", "rm -rf", "none"):
+            assert (
+                client.post(f"/live/{target}/corrupt/{name}", follow_redirects=False).status_code
+                == 404
+            )
+
+    def test_corrupting_an_unknown_case_is_a_404(self, client: TestClient) -> None:
+        assert (
+            client.post("/live/EXC-nope/corrupt/cross_category", follow_redirects=False).status_code
+            == 404
+        )
+        assert client.post("/live/EXC-nope/restore", follow_redirects=False).status_code == 404
+
+    def test_corruption_never_moves_the_world(self, client: TestClient) -> None:
+        target = _first(client, reason="plan_matched")
+        before = client.get("/api/world").json()["world_hash"]
+        client.post(f"/live/{target}/corrupt/cross_category", follow_redirects=False)
+        assert client.get("/api/world").json()["world_hash"] == before
+        client.post(f"/live/{target}/restore", follow_redirects=False)
+        assert client.get("/api/world").json()["world_hash"] == before
+
+    def test_the_synthetic_data_banner_is_on_every_page(self, client: TestClient) -> None:
+        first = client.get("/api/backlog").json()["items"][0]["exception_id"]
+        for path in ("/", "/queue", "/ledger", f"/live/{first}", "/s/ambiguous/decision"):
+            page = client.get(path).text
+            assert "DEMO MODE" in page
+            assert "research grade: False" in page
+            assert "no real payment rail" in page

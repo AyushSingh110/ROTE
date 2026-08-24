@@ -111,6 +111,82 @@ ledger.{% endblock %}
 
 {% endif %}
 
+{% if detail.corrupted_with %}
+<div class="callout corrupt">
+  <strong>Upstream evidence has been altered for this demonstration:</strong>
+  <span class="mono">{{ detail.corrupted_with }}</span>.
+  The world and the authoritative record are untouched &mdash; only the evidence handed to Rote
+  changed, which is exactly what an upstream extraction error looks like.
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Evidence verification &mdash; upstream vs the authoritative record</h2>
+  {% if detail.verification %}
+  <p class="verdict {{ detail.verification.outcome.value }}">
+    {{ detail.verification.outcome.value|upper }}
+  </p>
+  <div class="scroll">
+    <table>
+      <tr><th>Field</th><th>Upstream evidence</th><th>Authoritative record</th><th></th></tr>
+      {% for check in detail.verification.checks %}
+      <tr class="check {{ check.outcome.value }}">
+        <td>{{ check.field }}</td>
+        <td class="mono">{{ check.upstream }}</td>
+        <td class="mono">{{ check.authoritative }}</td>
+        <td class="mono">{{ check.outcome.value }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p class="note">Every value on the right was re-read through the Policy Gate under actor
+    <span class="mono">system:verifier</span>. Looking is audited too.</p>
+  {% else %}
+  <p style="color:#5b6472">Verification is not enabled in this session.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Which procedures fit this evidence?</h2>
+  <div class="scroll">
+    <table>
+      <tr><th>Procedure</th><th>Precondition</th><th>Holds?</th></tr>
+      {% for procedure in detail.procedures %}
+      <tr>
+        <td class="mono">{{ procedure.category }}</td>
+        <td>{{ procedure.precondition }}</td>
+        <td>{{ 'yes' if procedure.holds else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p><strong>{{ detail.fitting_categories|length }} procedure(s) fit.</strong>
+    {% if detail.fitting_categories|length > 1 %}
+      Multiple procedures are consistent with this evidence, so no plan will be fetched.
+    {% elif detail.fitting_categories|length == 1 %}
+      Exactly one fits, so this case is eligible for a compiled plan.
+    {% else %}
+      Nothing fits, so there is no procedure to serve.
+    {% endif %}
+  </p>
+</div>
+
+<div class="panel demo-controls">
+  <h2>Demonstration controls &mdash; synthetic data only</h2>
+  <p class="note">These rewrite the <em>evidence</em> handed to Rote for this one case. The
+    simulated world is never touched, so the authoritative record still holds the truth.</p>
+  <div class="controls">
+    {% for error, caption in corruptions %}
+    <form method="post" action="/live/{{ detail.exception_id }}/corrupt/{{ error.value }}">
+      <button type="submit" class="btn">{{ caption }}</button>
+    </form>
+    {% endfor %}
+    <form method="post" action="/live/{{ detail.exception_id }}/restore">
+      <button type="submit" class="btn restore">Restore original evidence</button>
+    </form>
+  </div>
+</div>
+
 <div class="grid2">
   <div class="panel">
     <h2>Structured evidence &mdash; trusted</h2>

@@ -208,3 +208,20 @@ footer { color: var(--muted); font-size: 12px; padding: 8px 24px 40px; text-alig
   font-weight: 700; }
 .topnav { margin-top: 8px !important; font-size: 13px; }
 .topnav a { text-decoration: none; }
+
+/* ---- sandbox: evidence comparison and demo controls ---- */
+.verdict { font-weight: 700; letter-spacing: .04em; margin: 0 0 10px; }
+.verdict.agreement { color: #1c7c4a; }
+.verdict.mismatch { color: #b3261e; }
+.verdict.unverifiable { color: #8a6d1f; }
+tr.check.mismatch td { background: #fff5f5; }
+tr.check.unverifiable td { background: #fffaf0; }
+.callout.corrupt { border-color: var(--refuse); background: var(--refuse-bg); }
+.demo-controls .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.demo-controls form { margin: 0; }
+.btn {
+  font: inherit; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: #fff; color: var(--ink);
+}
+.btn:hover { border-color: var(--ink); }
+.btn.restore { background: #16181d; color: #fff; border-color: #16181d; }

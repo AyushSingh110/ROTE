@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from rote.bootstrap.evidence_corruption import EvidenceError, corrupt
 from rote.bootstrap.system import CompiledSystem
 from rote.contracts.canonical import canonical_hash
 from rote.contracts.classifier import ClassifierModel
@@ -20,7 +21,11 @@ from rote.contracts.execution import ExecutionOutcome, ExecutionResult, ResultVe
 from rote.contracts.ledger import LedgerEventType
 from rote.contracts.plan import Plan, PlanStep
 from rote.contracts.policy import ExecutionPath, PolicyConfig, PolicyContext
-from rote.contracts.reconciliation import GeneratedDataset, ReconciliationException
+from rote.contracts.reconciliation import (
+    GeneratedDataset,
+    ReconciliationException,
+    ReconciliationFacts,
+)
 from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
 from rote.contracts.tools import Toolbox, ToolSpec
 from rote.domain.generators.divergence import DivergenceLabel, inject
@@ -44,6 +49,28 @@ from rote.service.scenario import (
 
 FROZEN = ConfigDict(extra="forbid", frozen=True)
 COUNTS_MODEL_CALLS = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+
+# display text only: these DESCRIBE the predicates in rote.runtime.preconditions, they never
+# implement them. A test asserts every generated category has one.
+PRECONDITION_DESCRIPTIONS: dict[ExceptionCategory, str] = {
+    ExceptionCategory.TIMING_CUTOFF: "amounts equal and the bank posted later than capture",
+    ExceptionCategory.FEE_MISMATCH: "same currency and the bank paid less than expected",
+    ExceptionCategory.PARTIAL_PAYMENT: "same currency and the bank paid less than expected",
+    ExceptionCategory.FX_ROUNDING: "the bank credited a different currency",
+    ExceptionCategory.TRANSPOSED_REFERENCE: (
+        "amounts equal and the two references are rearrangements of each other"
+    ),
+    ExceptionCategory.DUPLICATE_ENTRY: "two or more candidate lines share the same reference",
+}
+
+
+class ProcedureFit(BaseModel):
+    model_config = FROZEN
+
+    category: str
+    precondition: str
+    holds: bool
 
 
 class BacklogItem(BaseModel):
@@ -90,6 +117,10 @@ class InvestigationDetail(BaseModel):
     domain: Domain
     facts: dict[str, Any]
     untrusted: tuple[UntrustedBlockView, ...]
+    verification: VerificationResult | None
+    procedures: tuple[ProcedureFit, ...]
+    fitting_categories: tuple[str, ...]
+    corrupted_with: str | None
 
 
 class ResolutionView(BaseModel):
@@ -238,6 +269,9 @@ class SessionRuntime:
         self._model: ClassifierModel = classifier_model or StructuredFieldsClassifier()
         self._classifier = Classifier(model=self._model)
         self._resolved: dict[str, ResolutionView] = {}
+        self._original: dict[str, ReconciliationFacts] = {}
+        self._corrupted: dict[str, str] = {}
+        self._truth_for_demo = {t.exception_id: t.category for t in dataset.ground_truths}
 
     @property
     def classifier_is_local(self) -> bool:
@@ -269,10 +303,12 @@ class SessionRuntime:
 
     def investigation(self, exception_id: str) -> InvestigationDetail:
         exception = self._exception(exception_id)
+        facts = exception.facts.model_dump(mode="json")
+        fitting = _fitting(facts)
         return InvestigationDetail(
             exception_id=exception.exception_id,
             domain=exception.domain,
-            facts=exception.facts.model_dump(mode="json"),
+            facts=facts,
             untrusted=tuple(
                 UntrustedBlockView(
                     source_path=block.source_path,
@@ -281,7 +317,56 @@ class SessionRuntime:
                 )
                 for block in exception.untrusted
             ),
+            verification=verify(exception.facts, self._verification_boundary(exception_id)),
+            procedures=tuple(
+                ProcedureFit(
+                    category=member.value,
+                    precondition=PRECONDITION_DESCRIPTIONS[member],
+                    holds=member.value in fitting,
+                )
+                for member in GENERATED_CATEGORIES
+            ),
+            fitting_categories=fitting,
+            corrupted_with=self._corrupted.get(exception_id),
         )
+
+    # demonstration control: rewrites the EVIDENCE for one synthetic case. The world is never
+    # touched, so the authoritative record still holds the truth and the disagreement is real.
+    def corrupt_case(self, exception_id: str, error: EvidenceError) -> InvestigationDetail:
+        exception = self._exception(exception_id)
+        self._original.setdefault(exception_id, exception.facts)
+        # the true category is used ONLY to fabricate a convincing wrong-looking case; it is
+        # never handed to the classifier, router or verifier, which see the corrupted facts alone
+        corrupted, applied = corrupt(self._original[exception_id], error, self._truth_for_demo)
+        if applied:
+            self._replace_facts(exception_id, corrupted)
+            self._corrupted[exception_id] = error.value
+        return self.investigation(exception_id)
+
+    def restore_case(self, exception_id: str) -> InvestigationDetail:
+        self._exception(exception_id)
+        original = self._original.pop(exception_id, None)
+        if original is not None:
+            self._replace_facts(exception_id, original)
+        self._corrupted.pop(exception_id, None)
+        return self.investigation(exception_id)
+
+    def corrupted_cases(self) -> dict[str, str]:
+        return dict(self._corrupted)
+
+    def count_financial_intents(self, task_id: str) -> int:
+        return self.count_events(task_id, LedgerEventType.INTENT)
+
+    # a decision made on different evidence is a different decision, so the cached one is dropped
+    def _replace_facts(self, exception_id: str, facts: ReconciliationFacts) -> None:
+        was = self._exceptions[exception_id]
+        self._exceptions[exception_id] = ReconciliationException(
+            exception_id=was.exception_id,
+            domain=was.domain,
+            facts=facts,
+            untrusted=was.untrusted,
+        )
+        self._resolved.pop(exception_id, None)
 
     # routing only: no plan is executed, no tool is called, nothing is written
     def preview(self, exception_id: str) -> RoutingPreview:

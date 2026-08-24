@@ -198,8 +198,27 @@ class TestTheContractAdditionIsAdditive:
         assert len(set(RouteReason)) == 8
 
 
-def test_the_true_category_is_never_consulted_by_the_session() -> None:
+def test_the_session_never_judges_its_own_decisions() -> None:
     source = (ROOT / "service" / "session.py").read_text(encoding="utf-8")
-    for banned in ("ground_truth", "GroundTruth", "check_outcome", "CheckerVerdict"):
+    for banned in ("check_outcome", "CheckerVerdict"):
         assert banned not in source, banned
     assert ExceptionCategory.__name__ in source
+
+
+# The session holds the true categories for ONE purpose: fabricating a convincing demo
+# corruption. This pins that they are read nowhere else — not in classify, route, verify or
+# resolve. If a decision path ever touches them, this fails.
+def test_ground_truth_is_read_only_by_the_demo_corruption_control() -> None:
+    source = (ROOT / "service" / "session.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def uses_truth(node: ast.AST) -> bool:
+        return any(
+            isinstance(inner, ast.Attribute) and inner.attr == "_truth_for_demo"
+            for inner in ast.walk(node)
+        )
+
+    readers = [f.name for f in ast.walk(tree) if isinstance(f, ast.FunctionDef) and uses_truth(f)]
+    # __init__ stores it; corrupt_case is the only thing that reads it
+    assert readers == ["__init__", "corrupt_case"], f"ground truth is read by {readers}"
+    assert source.count("ground_truths") == 1, "ground truth is unpacked more than once"
