@@ -73,27 +73,29 @@ def verify(facts: ReconciliationFacts, adapters: ReconciliationTools) -> Verific
     return _result(facts, checks)
 
 
-# primary path: the lines the authoritative record's own reference points at. Fallback: lines of
-# the authoritative amount around the authoritative capture date, the same window the compiled
-# plan uses. Both were fixed before the sweep was run.
+# the UNION of both authoritative queries, never one as a fallback for the other: a fallback
+# that fires only when the primary is empty can silently return a partial set, which is exactly
+# the defect the clean control exposed.
 def _authoritative_lines(
     adapters: ReconciliationTools, record: dict[str, Any]
 ) -> tuple[dict[str, Any], ...]:
-    found = _read(adapters, "list_bank_lines_for_reference", {"reference": record["reference"]})
-    ids: tuple[str, ...] = tuple(found["line_ids"]) if found else ()
-    if not ids:
-        by_amount = _read(
-            adapters,
-            "find_bank_lines_by_amount",
-            {
-                "minor_units": record["amount"]["minor_units"],
-                "currency": record["amount"]["currency"],
-                "around_date": record["captured_on"],
-                "window_days": SEARCH_WINDOW_DAYS,
-            },
-        )
-        ids = tuple(by_amount["line_ids"]) if by_amount else ()
-
+    by_reference = _read(
+        adapters, "list_bank_lines_for_reference", {"reference": record["reference"]}
+    )
+    by_amount = _read(
+        adapters,
+        "find_bank_lines_by_amount",
+        {
+            "minor_units": record["amount"]["minor_units"],
+            "currency": record["amount"]["currency"],
+            "around_date": record["captured_on"],
+            "window_days": SEARCH_WINDOW_DAYS,
+        },
+    )
+    ids = sorted(
+        set(by_reference["line_ids"] if by_reference else ())
+        | set(by_amount["line_ids"] if by_amount else ())
+    )
     lines = []
     for line_id in ids:
         payload = _read(adapters, "get_bank_line", {"line_id": line_id})
@@ -102,12 +104,19 @@ def _authoritative_lines(
     return tuple(lines)
 
 
+# fixed before running: equal -> agreement; evidence naming a line the world cannot associate
+# -> UNVERIFIABLE, never a guess; evidence omitting a line the world confirms -> mismatch.
 def _candidate_check(facts: ReconciliationFacts, lines: tuple[dict[str, Any], ...]) -> FieldCheck:
     if not lines:
         return _absent("candidate_bank_line_ids", ", ".join(facts.candidate_bank_line_ids))
     upstream = set(facts.candidate_bank_line_ids)
     found = {str(line["line_id"]) for line in lines}
-    outcome = VerificationOutcome.AGREEMENT if upstream == found else VerificationOutcome.MISMATCH
+    if upstream == found:
+        outcome = VerificationOutcome.AGREEMENT
+    elif upstream - found:
+        outcome = VerificationOutcome.UNVERIFIABLE
+    else:
+        outcome = VerificationOutcome.MISMATCH
     return FieldCheck(
         field="candidate_bank_line_ids",
         upstream=", ".join(sorted(upstream)),

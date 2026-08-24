@@ -15,6 +15,7 @@ PLAUSIBLE_SHIFT_MINOR_UNITS = 500
 TIMESTAMP_SHIFT_DAYS = 3
 SUBSTITUTE_REFERENCE = "REF99999999"
 SUBSTITUTE_MERCHANT = "MRC-substitute"
+SUBSTITUTE_LINE = "BNK-000002"
 
 
 # the corruption classes, fixed in writing before any case was run. Each one models an upstream
@@ -28,6 +29,7 @@ class EvidenceError(StrEnum):
     TIMESTAMP_SHIFT = "timestamp_shift"
     MISSING_FIELD = "missing_field"
     UNREAD_FIELD = "unread_field"
+    CANDIDATE_SUBSTITUTION = "candidate_substitution"
     CROSS_CATEGORY = "cross_category"
 
 
@@ -43,6 +45,11 @@ def corrupt(
         return _cross_category(facts, truth), True
     if error is EvidenceError.UNREAD_FIELD:
         return facts.model_copy(update={"merchant_id": SUBSTITUTE_MERCHANT}), True
+    if error is EvidenceError.CANDIDATE_SUBSTITUTION:
+        swapped = (SUBSTITUTE_LINE, *facts.candidate_bank_line_ids[1:])
+        if swapped == facts.candidate_bank_line_ids:
+            return facts, False
+        return facts.model_copy(update={"candidate_bank_line_ids": swapped}), True
     if error is EvidenceError.MISSING_FIELD:
         return facts.model_copy(update={"bank_amount": None}), True
     if error is EvidenceError.REFERENCE_SUBSTITUTION:

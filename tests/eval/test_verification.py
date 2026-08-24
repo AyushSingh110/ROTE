@@ -60,25 +60,47 @@ BROKEN_FIELD = "candidate_bank_line_ids"
 
 
 class TestCleanEvidenceAgrees:
-    # A MEASURED DEFECT IN THIS PROBE, pinned rather than papered over. On uncorrupted evidence
-    # the candidate-id comparator reports 89 false mismatches, all on transposed_reference: the
-    # bank narration is a scrambled reference, so lookup by the record's reference finds nothing
-    # and the by-amount fallback recovers only a subset of the true candidate set. The evidence
-    # is right; this reconstruction rule cannot reproduce it.
-    def test_the_clean_false_mismatch_is_confined_to_one_field_and_one_category(self) -> None:
-        mismatched = [(e.exception_id, verify(e.facts, ADAPTERS)) for e in DATA.exceptions]
-        offenders = [(eid, r) for eid, r in mismatched if r.outcome is VerificationOutcome.MISMATCH]
-        assert len(offenders) == 89
-        assert {field for _eid, r in offenders for field in r.mismatched_fields} == {BROKEN_FIELD}
-        assert {TRUTH[eid].value for eid, _r in offenders} == {"transposed_reference"}
-
-    # the other nine comparators are sound: zero false mismatches on all 500 clean cases
-    def test_the_remaining_fields_never_disagree_on_clean_evidence(self) -> None:
+    # The clean control originally failed: 89 false mismatches, all on candidate_bank_line_ids,
+    # all transposed_reference. Cause was a fallback that fired only when the primary query was
+    # empty and so returned a partial set. Repaired to a union plus abstention; these tests pin
+    # the repaired behaviour, and the failure itself is recorded in the report.
+    def test_no_clean_case_produces_a_false_mismatch(self) -> None:
         for exception in DATA.exceptions:
             result = verify(exception.facts, ADAPTERS)
-            assert [
-                f for f in result.mismatched_fields if f != BROKEN_FIELD
-            ] == [], f"{exception.exception_id}: {result.mismatched_fields}"
+            assert (
+                result.mismatched_fields == ()
+            ), f"{exception.exception_id}: {result.mismatched_fields}"
+
+    def test_the_abstentions_are_exactly_the_transposed_cases(self) -> None:
+        abstained = [
+            e.exception_id
+            for e in DATA.exceptions
+            if verify(e.facts, ADAPTERS).outcome is VerificationOutcome.UNVERIFIABLE
+        ]
+        assert len(abstained) == 89
+        assert {TRUTH[eid].value for eid in abstained} == {"transposed_reference"}
+
+    # abstention must never be silently upgraded to agreement
+    def test_an_unconfirmable_candidate_abstains_rather_than_guessing(self) -> None:
+        transposed = next(
+            e
+            for e in DATA.exceptions
+            if TRUTH[e.exception_id] is ExceptionCategory.TRANSPOSED_REFERENCE
+        )
+        result = verify(transposed.facts, ADAPTERS)
+        assert result.outcome is VerificationOutcome.UNVERIFIABLE
+        assert BROKEN_FIELD in result.unverifiable_fields
+        assert BROKEN_FIELD not in result.mismatched_fields
+
+    def test_omitting_a_confirmed_candidate_is_a_mismatch(self) -> None:
+        duplicate = next(
+            e for e in DATA.exceptions if TRUTH[e.exception_id] is ExceptionCategory.DUPLICATE_ENTRY
+        )
+        assert len(duplicate.facts.candidate_bank_line_ids) == 2
+        truncated = duplicate.facts.model_copy(
+            update={"candidate_bank_line_ids": duplicate.facts.candidate_bank_line_ids[:1]}
+        )
+        assert BROKEN_FIELD in verify(truncated, ADAPTERS).mismatched_fields
 
     def test_a_clean_case_reports_the_fields_it_checked(self) -> None:
         result = verify(a_case(ExceptionCategory.FX_ROUNDING).facts, ADAPTERS)
