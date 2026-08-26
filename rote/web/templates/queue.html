@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Live queue{% endblock %}
 {% block subtitle %}&mdash; live exception queue{% endblock %}
-{% block strapline %}Pick any case. Nothing below is pre-selected or pre-computed &mdash; the
-classifier and router run when the page loads, and nothing executes until you ask.{% endblock %}
+{% block strapline %}Pick any case. Nothing below is pre-selected. This list is decided by the
+evidence alone &mdash; no model has been asked yet. Open a case to run the real
+classification.{% endblock %}
 {% block content %}
 
 <div class="panel">
@@ -31,10 +32,12 @@ classifier and router run when the page loads, and nothing executes until you as
           {%- else -%}none{%- endif -%}
         </td>
         <td>
-          {% if preview.route_kind.value == 'compiled_plan' %}
-            <span class="pill automate">AUTOMATE</span>
+          {% if preview.ambiguous %}
+            <span class="pill escalate">REFUSE &middot; ambiguous</span>
+          {% elif preview.eligible %}
+            <span class="pill">eligible</span>
           {% else %}
-            <span class="pill escalate">REFUSE</span>
+            <span class="pill escalate">REFUSE &middot; no procedure</span>
           {% endif %}
         </td>
         <td class="mono">{{ item.status }}</td>
@@ -42,9 +45,11 @@ classifier and router run when the page loads, and nothing executes until you as
       {% endfor %}
     </table>
   </div>
-  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">The <em>Would</em> column is a routing
-    preview: the classifier and router have run, but no plan was fetched and nothing was executed.
-    Open a case to run it for real.</p>
+  <p style="color:#5b6472;font-size:13px;margin:12px 0 0">The <em>Would</em> column is decided
+    by the structured evidence alone. When two procedures fit the same evidence Rote refuses
+    before any model is consulted, so no classification is needed to know that. Cases marked
+    <em>eligible</em> still have to pass the classifier, evidence verification, the Guard and the
+    policy gate &mdash; open one to run it for real.</p>
 </div>
 
 {% endblock %}

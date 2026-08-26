@@ -235,3 +235,95 @@ class TestNothingInProductionExposesAModelToUntrustedText:
 
         source = pathlib.Path("rote/service/session.py").read_text(encoding="utf-8")
         assert "may_read_untrusted" not in source
+
+
+# ------------------------------------------- asking the same question twice is waste
+class TestAClassificationIsNotRepurchased:
+    def test_the_same_case_is_classified_once(self) -> None:
+        model = Saying("fee_mismatch")
+        runtime = session(model)
+        target = a_case(runtime)
+        runtime.preview(target)
+        runtime.preview(target)
+        runtime.resolve(target)
+        assert len(model.seen) == 1, f"the model was asked {len(model.seen)} times"
+
+    def test_different_cases_are_still_classified_separately(self) -> None:
+        model = Saying("fee_mismatch")
+        runtime = session(model)
+        for item in runtime.backlog()[:4]:
+            runtime.preview(item.exception_id)
+        assert len(model.seen) == 4
+
+    # a decision made on different evidence is a different question, so the answer is re-asked
+    def test_changing_the_evidence_re_asks_the_model(self) -> None:
+        from rote.bootstrap.evidence_corruption import EvidenceError
+
+        model = Saying("fee_mismatch")
+        runtime = session(model)
+        target = a_case(runtime)
+        runtime.preview(target)
+        runtime.corrupt_case(target, EvidenceError.CROSS_CATEGORY)
+        runtime.preview(target)
+        assert len(model.seen) == 2
+        runtime.restore_case(target)
+        runtime.preview(target)
+        assert len(model.seen) == 3
+
+    # a timeout must not become a permanent verdict for that case
+    def test_a_provider_failure_is_never_cached(self) -> None:
+        broken = Failing(TimeoutError("read timed out"))
+        runtime = session(broken)
+        target = a_case(runtime)
+        runtime.preview(target)
+        runtime.preview(target)
+        assert broken.calls == 2
+
+    def test_the_cached_answer_is_the_one_that_was_given(self) -> None:
+        runtime = session(Saying("fx_rounding", 950))
+        target = a_case(runtime)
+        first = runtime.preview(target)
+        second = runtime.preview(target)
+        assert first.classified_as == second.classified_as == "fx_rounding"
+        assert second.classifier_confidence_per_mille == 950
+
+
+# ------------------------------------------- the queue must not be a bill
+class TestListingTheQueueCostsNoModelCalls:
+    def test_triage_asks_no_model(self) -> None:
+        model = Saying("fee_mismatch")
+        runtime = session(model)
+        for item in runtime.backlog():
+            runtime.triage(item.exception_id)
+        assert model.seen == [], "listing the backlog called the classifier"
+
+    def test_triage_still_names_the_procedures_that_fit(self) -> None:
+        runtime = session(Saying("fee_mismatch"))
+        found = [runtime.triage(i.exception_id) for i in runtime.backlog()[:60]]
+        assert any(len(t.fitting_categories) > 1 for t in found)
+        assert all(isinstance(t.ambiguous, bool) for t in found)
+
+    def test_an_ambiguous_case_is_visible_before_any_model_runs(self) -> None:
+        runtime = session(Saying("fee_mismatch"))
+        triaged = next(
+            t
+            for t in (runtime.triage(i.exception_id) for i in runtime.backlog()[:60])
+            if t.ambiguous
+        )
+        assert len(triaged.fitting_categories) > 1
+        assert triaged.eligible is False
+
+    def test_triage_agrees_with_the_router_about_ambiguity(self) -> None:
+        runtime = session()
+        for item in runtime.backlog()[:40]:
+            triaged = runtime.triage(item.exception_id)
+            routed = runtime.preview(item.exception_id)
+            assert triaged.ambiguous is (routed.route_reason is RouteReason.AMBIGUOUS_EVIDENCE)
+
+    def test_the_web_queue_route_never_previews(self) -> None:
+        import pathlib
+
+        source = pathlib.Path("rote/web/app.py").read_text(encoding="utf-8")
+        queue_block = source.split('@app.get("/queue"', 1)[1].split("@app.get", 1)[0]
+        assert "preview(" not in queue_block, "the queue page still classifies every row"
+        assert "triage(" in queue_block

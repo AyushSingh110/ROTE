@@ -1,11 +1,24 @@
+---
+title: Rote
+emoji: 🔒
+colorFrom: gray
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: An authority layer between AI reasoning and financial actions
+---
+
 # Rote
 
 **An authority layer that decides when an AI-derived financial procedure has earned deterministic
 execution authority — and refuses to automate when the evidence is ambiguous.**
 
-> ⚠️ **Offline research prototype. `research grade: False`.** The financial world, the agent and the
-> classifier are deterministic stand-ins written for this project. No real payment rail, no bank, no
-> external API, no credentials, no real money. Nothing here is production financial infrastructure.
+> ⚠️ **Synthetic research prototype. `research grade: False`.** The financial world, the exception
+> queue and the fallback agent are deterministic stand-ins written for this project. **No real
+> payment rail, no bank, no real money, no customer data.** A real hosted language model (Groq)
+> can be enabled as the classifier, and that is the only external call the system makes.
+> Nothing here is production financial infrastructure.
 
 ---
 

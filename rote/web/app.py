@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import os
 import time
 from collections.abc import AsyncIterator
@@ -8,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -71,7 +73,30 @@ def llm_enabled() -> bool:
     return os.environ.get(ROTE_CLASSIFIER, "").strip().lower() == LLM_MODE
 
 
-_READY: dict[str, float] = {}
+# Paths that answer while the plans are still compiling. Everything else is held: a route
+# that quietly built the runtime on demand would compile it a second time, and would let a
+# request act before the system is genuinely able to.
+ALWAYS_REACHABLE = frozenset({"/health"})
+WARMING_SECONDS_HINT = 180
+WARMING_PAGE = (HERE / "templates" / "warming.html").read_text(encoding="utf-8")
+
+
+@dataclasses.dataclass
+class Readiness:
+    """Whether the runtime can actually serve. Never set optimistically."""
+
+    ready: bool = False
+    seconds: float | None = None
+    error: str | None = None
+
+    def finished(self, seconds: float) -> None:
+        self.seconds = round(seconds, 2)
+        self.ready = True
+
+    def failed(self, error: BaseException) -> None:
+        # a misconfigured deployment stays not-ready and says why, rather than serving wrongly
+        self.error = f"{type(error).__name__}: {error}"[:200]
+        self.ready = False
 
 
 class ResolveRequest(BaseModel):
@@ -101,26 +126,51 @@ def warmup() -> float:
     return time.perf_counter() - started
 
 
+# compiling is CPU-bound and takes minutes on a small host, so it runs off the event loop
+# while the port already accepts connections. Requests are held until it finishes.
+async def _warm_in_background(readiness: Readiness) -> None:
+    _logger.info("warmup_started", note="compiling plans; requests are held until this finishes")
+    started = time.perf_counter()
+    try:
+        await asyncio.to_thread(warmup)
+    except Exception as error:
+        readiness.failed(error)
+        _logger.info("warmup_failed", error=type(error).__name__)
+        return
+    readiness.finished(time.perf_counter() - started)
+    _logger.info("warmup_complete", seconds=readiness.seconds, scenarios=len(ScenarioId))
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # compile once at startup so no presenter waits for it mid-demonstration. The port does not
-    # accept connections until this finishes, so "it answers" is the readiness signal.
-    _logger.info("warmup_started", note="compiling plans; the server is not serving yet")
-    elapsed = warmup()
-    _READY["seconds"] = round(elapsed, 2)
-    _logger.info(
-        "warmup_complete",
-        seconds=_READY["seconds"],
-        scenarios=len(ScenarioId),
-        note="READY - open http://127.0.0.1:8000/",
-    )
+    task = asyncio.create_task(_warm_in_background(app.state.readiness))
     yield
+    task.cancel()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Rote", docs_url=None, redoc_url=None, lifespan=_lifespan)
+    app.state.readiness = Readiness()
     templates = Jinja2Templates(directory=str(HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+
+    @app.middleware("http")
+    async def hold_until_ready(request: Request, call_next: Any) -> Any:
+        path = request.url.path
+        if request.app.state.readiness.ready or path in ALWAYS_REACHABLE:
+            return await call_next(request)
+        if path.startswith("/static"):
+            return await call_next(request)
+        if path.startswith("/api"):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "ready": False,
+                    "warming_up": True,
+                    "detail": "Rote is still compiling its procedures; nothing is served yet",
+                },
+            )
+        return HTMLResponse(content=WARMING_PAGE, status_code=503)
 
     def page(request: Request, name: str, **context: Any) -> HTMLResponse:
         return templates.TemplateResponse(
@@ -176,7 +226,7 @@ def create_app() -> FastAPI:
         return page(
             request,
             "queue.html",
-            rows=[(item, runtime.preview(item.exception_id)) for item in items],
+            rows=[(item, runtime.triage(item.exception_id)) for item in items],
             shown=len(items),
             total=len(runtime.backlog()),
         )
@@ -222,10 +272,25 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        readiness: Readiness = app.state.readiness
+        if not readiness.ready:
+            # the runtime does not exist yet, so nothing here may touch it
+            return {
+                "ready": False,
+                "warming_up": True,
+                "warmup_seconds": readiness.seconds,
+                "warmup_error": readiness.error,
+                "expected_warmup_seconds_hint": WARMING_SECONDS_HINT,
+                "research_grade": False,
+                "verify_evidence": verification_enabled(),
+                "classifier": LLM_MODE if llm_enabled() else "deterministic",
+            }
         runtime = session()
         return {
             "ready": True,
-            "warmup_seconds": _READY.get("seconds"),
+            "warming_up": False,
+            "warmup_error": readiness.error,
+            "warmup_seconds": readiness.seconds,
             "scenarios": len(ScenarioId),
             "backlog": len(runtime.backlog()),
             "ledger_entries": len(runtime.ledger.entries),
@@ -286,4 +351,13 @@ def create_app() -> FastAPI:
 
 app = create_app()
 
-__all__ = ["ADVERSARIAL", "BANNER", "BASELINES", "app", "create_app", "warmup"]
+__all__ = [
+    "ADVERSARIAL",
+    "ALWAYS_REACHABLE",
+    "BANNER",
+    "BASELINES",
+    "Readiness",
+    "app",
+    "create_app",
+    "warmup",
+]

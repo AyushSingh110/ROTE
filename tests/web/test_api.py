@@ -1,5 +1,6 @@
 import ast
 import pathlib
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -14,7 +15,12 @@ LOWER_LAYERS = ("contracts", "safety", "domain", "recorder", "compiler", "runtim
 
 @pytest.fixture(scope="module")
 def client() -> Iterator[TestClient]:
+    # warmup now runs in the background so the port opens immediately; a caller that wants a
+    # working application waits for readiness, exactly as a real client does
     with TestClient(create_app()) as started:
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline and not started.get("/health").json()["ready"]:
+            time.sleep(0.5)
         yield started
 
 

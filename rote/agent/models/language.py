@@ -5,14 +5,16 @@ classifier contract and the standard library, so there is no tool, gate, plan or
 scope here even by accident; an import-linter contract pins that.
 
 No SDK is used on purpose: one JSON POST is smaller to read, smaller to audit and adds no
-dependency. Two providers are supported, one hosted and one local, because the runtime must
-treat every model identically whatever produced the answer.
+dependency. Three providers are supported, two hosted and one local, because the runtime
+must treat every model identically whatever produced the answer.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import ssl
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -25,6 +27,7 @@ from rote.contracts.classifier import ClassificationRequest, ClassificationRespo
 from rote.contracts.errors import ClassifierError
 
 ANTHROPIC = "anthropic"
+GROQ = "groq"
 OLLAMA = "ollama"
 
 ROTE_CLASSIFIER = "ROTE_CLASSIFIER"
@@ -41,6 +44,9 @@ PROMPT_TEMPLATE_ID = "classify-structured-only-v1"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_MAX_ATTEMPTS = 2
 MAX_ANSWER_TOKENS = 256
+# the stdlib default of "Python-urllib/x.y" is answered with 403 by at least one provider's
+# edge, so the request names itself. It carries no credential and no machine detail.
+USER_AGENT = "rote/0.1 (synthetic research prototype)"
 # retrying these cannot help: the request or the credential is wrong, not the connection
 FATAL_HTTP_STATUS = frozenset({400, 401, 403, 404, 422})
 
@@ -104,6 +110,14 @@ _DEFAULTS: dict[str, ProviderConfig] = {
         model="claude-sonnet-5",
         endpoint="https://api.anthropic.com/v1/messages",
         api_key_env="ANTHROPIC_API_KEY",
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        max_attempts=DEFAULT_MAX_ATTEMPTS,
+    ),
+    GROQ: ProviderConfig(
+        provider=GROQ,
+        model="openai/gpt-oss-120b",
+        endpoint="https://api.groq.com/openai/v1/chat/completions",
+        api_key_env="GROQ_API_KEY",
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
         max_attempts=DEFAULT_MAX_ATTEMPTS,
     ),
@@ -249,8 +263,13 @@ class LlmClassifier:
     def _count_tokens(self, body: Mapping[str, Any]) -> None:
         usage = body.get("usage")
         if isinstance(usage, Mapping):
-            self.tokens_in += _as_count(usage.get("input_tokens"))
-            self.tokens_out += _as_count(usage.get("output_tokens"))
+            # anthropic names them input/output, the openai-compatible shape prompt/completion
+            self.tokens_in += _as_count(usage.get("input_tokens")) + _as_count(
+                usage.get("prompt_tokens")
+            )
+            self.tokens_out += _as_count(usage.get("output_tokens")) + _as_count(
+                usage.get("completion_tokens")
+            )
             return
         self.tokens_in += _as_count(body.get("prompt_eval_count"))
         self.tokens_out += _as_count(body.get("eval_count"))
@@ -286,6 +305,17 @@ def _provider_payload(config: ProviderConfig, prompt: str) -> dict[str, Any]:
             "system": SYSTEM_INSTRUCTION,
             "messages": [{"role": "user", "content": prompt}],
         }
+    if config.provider == GROQ:
+        return {
+            "model": config.model,
+            "temperature": 0,
+            # the shape becomes the provider's guarantee rather than something we hope for
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": prompt},
+            ],
+        }
     return {
         "model": config.model,
         "stream": False,
@@ -301,10 +331,12 @@ def _provider_payload(config: ProviderConfig, prompt: str) -> dict[str, Any]:
 
 
 def _provider_headers(config: ProviderConfig, api_key: str) -> dict[str, str]:
-    headers = {"content-type": "application/json"}
+    headers = {"content-type": "application/json", "User-Agent": USER_AGENT}
     if config.provider == ANTHROPIC:
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = "2023-06-01"
+    elif config.provider == GROQ:
+        headers["Authorization"] = f"Bearer {api_key}"
     return headers
 
 
@@ -321,6 +353,15 @@ def _provider_text(provider: str, body: Mapping[str, Any]) -> str:
         if not found:
             raise ClassifierError("the provider body carries no text block")
         return "".join(found)
+    if provider == GROQ:
+        choices = body.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ClassifierError("the provider body carries no choices")
+        first = choices[0]
+        message = first.get("message") if isinstance(first, Mapping) else None
+        if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
+            raise ClassifierError("the first choice carries no message content")
+        return str(message["content"])
     message = body.get("message")
     if isinstance(message, Mapping) and isinstance(message.get("content"), str):
         return str(message["content"])
@@ -369,9 +410,34 @@ def _first_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+# Built once and reused. On some Windows machines a single malformed entry in the root
+# store makes ssl.create_default_context() raise outright, which would take every HTTPS call
+# down with it. The answer is to load the roots one at a time and skip the unparseable one --
+# never to stop verifying. A test asserts this module cannot turn verification off.
+@functools.lru_cache(maxsize=1)
+def tls_context() -> ssl.SSLContext:
+    try:
+        return ssl.create_default_context()
+    except ssl.SSLError:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+        for certificate, _encoding, _trust in ssl.enum_certificates("ROOT"):
+            try:
+                context.load_verify_locations(cadata=certificate)
+            except ssl.SSLError:
+                # OpenSSL reports "not enough data" once it has consumed the single DER
+                # certificate and looks for another. The certificate is loaded regardless, so
+                # the count below is what decides whether this worked, not the exception.
+                continue
+        if not context.get_ca_certs():
+            raise
+        return context
+
+
 def _urllib_transport(url: str, data: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
     request = urllib.request.Request(url, data=data, headers=dict(headers), method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout, context=tls_context()) as response:
         read: bytes = response.read()
     return read
 
@@ -396,6 +462,8 @@ def _as_int(value: str | None) -> int | None:
 
 __all__ = [
     "ANTHROPIC",
+    "USER_AGENT",
+    "GROQ",
     "CATEGORY_BRIEF",
     "DETERMINISTIC_MODE",
     "LLM_MODE",
@@ -407,4 +475,5 @@ __all__ = [
     "ProviderConfig",
     "classifier_from_env",
     "provider_config",
+    "tls_context",
 ]

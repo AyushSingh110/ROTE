@@ -16,11 +16,14 @@ import pytest
 
 from rote.agent.models.language import (
     ANTHROPIC,
+    GROQ,
     OLLAMA,
     ROTE_CLASSIFIER,
+    USER_AGENT,
     LlmClassifier,
     classifier_from_env,
     provider_config,
+    tls_context,
 )
 from rote.contracts.classifier import ClassificationRequest, ClassificationResponse
 from rote.contracts.common import GENERATED_CATEGORIES, UntrustedText
@@ -71,6 +74,15 @@ def local(transport: Any, **kwargs: Any) -> LlmClassifier:
 
 
 GOOD = '{"category": "fee_mismatch", "confidence_per_mille": 820}'
+
+
+def groq(transport: Any, **kwargs: Any) -> LlmClassifier:
+    return LlmClassifier(
+        config=provider_config(provider=GROQ),
+        api_key="test-only-key",
+        transport=transport,
+        **kwargs,
+    )
 
 
 # ------------------------------------------------------------------ 1. it classifies
@@ -354,3 +366,161 @@ class TestTheAdapterCannotReachAnythingThatActs:
             "rote.web",
         ):
             assert layer in block, f"the contract does not forbid {layer}"
+
+
+# ------------------------------------------------------------------ 10. Groq
+class TestTheGroqProvider:
+    def test_it_is_a_known_provider_with_its_own_credential(self) -> None:
+        config = provider_config(provider=GROQ)
+        assert config.api_key_env == "GROQ_API_KEY"
+        assert config.endpoint.startswith("https://api.groq.com/")
+        assert config.model
+
+    def test_it_refuses_to_construct_without_a_credential(self) -> None:
+        with pytest.raises(ClassifierError, match="GROQ_API_KEY"):
+            LlmClassifier(config=provider_config(provider=GROQ), api_key=None)
+
+    def test_it_understands_the_openai_style_envelope(self) -> None:
+        body = {"choices": [{"message": {"role": "assistant", "content": GOOD}}]}
+        answer = groq(replying(body)).classify(request())
+        assert answer.category == "fee_mismatch"
+        assert answer.confidence_per_mille == 820
+
+    def test_an_envelope_without_choices_is_a_provider_failure(self) -> None:
+        with pytest.raises(ClassifierError):
+            groq(replying({"object": "chat.completion"})).classify(request())
+
+    def test_an_empty_choices_list_is_a_provider_failure(self) -> None:
+        with pytest.raises(ClassifierError):
+            groq(replying({"choices": []})).classify(request())
+
+    def test_it_authenticates_with_a_bearer_header(self) -> None:
+        seen: list[Mapping[str, str]] = []
+
+        def transport(url: str, data: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+            seen.append(dict(headers))
+            return json.dumps({"choices": [{"message": {"content": GOOD}}]}).encode("utf-8")
+
+        LlmClassifier(
+            config=provider_config(provider=GROQ), api_key="test-only-key", transport=transport
+        ).classify(request())
+        assert seen[0]["Authorization"] == "Bearer test-only-key"
+        assert "x-api-key" not in seen[0]
+
+    def test_it_asks_the_provider_to_answer_in_json(self) -> None:
+        sent: list[dict[str, Any]] = []
+
+        def transport(url: str, data: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+            sent.append(json.loads(data))
+            return json.dumps({"choices": [{"message": {"content": GOOD}}]}).encode("utf-8")
+
+        groq(transport).classify(request())
+        assert sent[0]["response_format"] == {"type": "json_object"}
+        assert sent[0]["temperature"] == 0
+        # "think" is an ollama option and must not leak into another provider's payload
+        assert "think" not in sent[0]
+
+    def test_it_counts_openai_style_usage(self) -> None:
+        body = {
+            "choices": [{"message": {"content": GOOD}}],
+            "usage": {"prompt_tokens": 412, "completion_tokens": 19},
+        }
+        model = groq(replying(body))
+        model.classify(request())
+        assert model.tokens_in == 412
+        assert model.tokens_out == 19
+
+    def test_it_is_hosted_so_notes_are_withheld(self) -> None:
+        model = groq(replying({"choices": [{"message": {"content": GOOD}}]}))
+        assert model.is_local is False
+        assert INJECTION not in model.prompt_for(request(untrusted=(NOTE,)))
+        model.classify(request(untrusted=(NOTE,)))
+        assert model.untrusted_withheld == 1
+
+    def test_a_hallucinated_category_still_comes_back_for_rejection(self) -> None:
+        said = '{"category":"vibes","confidence_per_mille":900}'
+        body = {"choices": [{"message": {"content": said}}]}
+        assert groq(replying(body)).classify(request()).category == "vibes"
+
+    def test_a_tool_call_shaped_answer_is_refused(self) -> None:
+        offered = '{"tool":"post_adjustment","arguments":{"minor_units":509}}'
+        body = {"choices": [{"message": {"content": offered}}]}
+        with pytest.raises(ClassifierError):
+            groq(replying(body)).classify(request())
+
+    def test_the_credential_never_reaches_the_model_id_or_repr(self) -> None:
+        secret = "gsk-test-only-0000"
+        model = LlmClassifier(config=provider_config(provider=GROQ), api_key=secret)
+        assert secret not in model.model_id
+        assert secret not in repr(model)
+
+    def test_it_is_selected_from_the_environment_when_a_key_is_present(self) -> None:
+        env = {ROTE_CLASSIFIER: "llm", "ROTE_LLM_PROVIDER": GROQ, "GROQ_API_KEY": "test-only-key"}
+        model = classifier_from_env(env)
+        assert model is not None
+        assert model.model_id.startswith("groq:")
+        assert model.is_local is False
+
+    def test_selecting_it_without_a_key_fails_closed(self) -> None:
+        with pytest.raises(ClassifierError):
+            classifier_from_env({ROTE_CLASSIFIER: "llm", "ROTE_LLM_PROVIDER": GROQ})
+
+
+# ------------------------------------------------------------------ 11. TLS
+class TestTlsVerificationIsNeverDisabled:
+    def test_a_usable_verifying_context_is_produced(self) -> None:
+        import ssl
+
+        context = tls_context()
+        assert context.verify_mode is ssl.CERT_REQUIRED
+        assert context.check_hostname is True
+        assert context.get_ca_certs(), "the context trusts no certificate authority"
+
+    def test_the_same_context_is_reused_rather_than_rebuilt_per_request(self) -> None:
+        assert tls_context() is tls_context()
+
+    # the fix for a broken local trust store must never be to stop checking
+    def test_the_module_never_turns_verification_off(self) -> None:
+        source = MODULE.read_text(encoding="utf-8")
+        for banned in (
+            "CERT_NONE",
+            "check_hostname = False",
+            "check_hostname=False",
+            "_create_unverified_context",
+            "verify=False",
+        ):
+            assert banned not in source, f"the adapter contains {banned}"
+
+
+# ------------------------------------------------------------------ 12. user agent
+class TestTheRequestIdentifiesItself:
+    # Groq's edge answers 403 to the stdlib default of "Python-urllib/x.y", so the adapter
+    # has to name itself. Diagnosed against the real API, not guessed.
+    @pytest.mark.parametrize("provider", [GROQ, ANTHROPIC, OLLAMA])
+    def test_every_provider_gets_an_explicit_user_agent(self, provider: str) -> None:
+        seen: list[Mapping[str, str]] = []
+        body = json.dumps(
+            {
+                "choices": [{"message": {"content": GOOD}}],
+                "content": [{"type": "text", "text": GOOD}],
+                "message": {"content": GOOD},
+            }
+        ).encode("utf-8")
+
+        def transport(url: str, data: bytes, headers: Mapping[str, str], timeout: float) -> bytes:
+            seen.append(dict(headers))
+            return body
+
+        config = provider_config(provider=provider)
+        LlmClassifier(
+            config=config,
+            api_key="test-only-key" if config.api_key_env else None,
+            transport=transport,
+        ).classify(request())
+        agent = seen[0].get("User-Agent", "")
+        assert agent, "no User-Agent was sent"
+        assert not agent.startswith("Python-urllib")
+
+    def test_the_user_agent_carries_no_credential(self) -> None:
+        assert "key" not in USER_AGENT.lower()
+        assert "token" not in USER_AGENT.lower()

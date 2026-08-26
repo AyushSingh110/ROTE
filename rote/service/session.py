@@ -79,6 +79,19 @@ class ProcedureFit(BaseModel):
     holds: bool
 
 
+# What Rote can say about a case before any model is asked. The ambiguity rule reads the
+# structured evidence alone, so the queue can show its judgement for free -- which matters when
+# the classifier is a metered hosted model, and reads more honestly either way.
+class QueueTriage(BaseModel):
+    model_config = FROZEN
+
+    exception_id: str
+    fitting_categories: tuple[str, ...]
+    ambiguous: bool
+    eligible: bool
+    status: str
+
+
 class BacklogItem(BaseModel):
     model_config = FROZEN
 
@@ -282,6 +295,10 @@ class SessionRuntime:
         self._original: dict[str, ReconciliationFacts] = {}
         self._corrupted: dict[str, str] = {}
         self._truth_for_demo = {t.exception_id: t.category for t in dataset.ground_truths}
+        # keyed by the hash of the evidence, so altering a case re-asks and nothing has to
+        # remember to invalidate it. A hosted model is metered, and asking it the same
+        # question twice buys nothing at temperature zero.
+        self._classified: dict[str, tuple[str, Classification]] = {}
 
     @property
     def classifier_model_id(self) -> str:
@@ -381,6 +398,18 @@ class SessionRuntime:
             untrusted=was.untrusted,
         )
         self._resolved.pop(exception_id, None)
+
+    # model-free: the evidence decides this, so listing a backlog costs nothing
+    def triage(self, exception_id: str) -> QueueTriage:
+        exception = self._exception(exception_id)
+        fitting = _fitting(exception.facts.model_dump(mode="json"))
+        return QueueTriage(
+            exception_id=exception_id,
+            fitting_categories=fitting,
+            ambiguous=len(fitting) > 1,
+            eligible=len(fitting) == 1,
+            status=self._status(exception_id),
+        )
 
     # routing only: no plan is executed, no tool is called, nothing is written
     def preview(self, exception_id: str) -> RoutingPreview:
@@ -576,10 +605,17 @@ class SessionRuntime:
         # structured evidence alone, and the count of what was kept back is reported.
         untrusted = exception.untrusted if self._model.is_local else ()
         withheld = len(exception.untrusted) - len(untrusted)
-        try:
-            classification = self._classifier.classify(facts, untrusted, exception.exception_id)
-        except Exception as error:
-            return (*self._classifier_down(exception.exception_id, error), spy, withheld)
+        fingerprint = canonical_hash(facts)
+        remembered = self._classified.get(exception.exception_id)
+        if remembered is not None and remembered[0] == fingerprint:
+            classification = remembered[1]
+        else:
+            try:
+                classification = self._classifier.classify(facts, untrusted, exception.exception_id)
+            except Exception as error:
+                # deliberately not remembered: a timeout is not a verdict on this case
+                return (*self._classifier_down(exception.exception_id, error), spy, withheld)
+            self._classified[exception.exception_id] = (fingerprint, classification)
         router = Router(
             plans=spy,
             domain=Domain.RECONCILIATION,
@@ -848,6 +884,7 @@ def reset_session(verify_evidence: bool = False, use_llm: bool = False) -> Sessi
 
 __all__ = [
     "LLM_MODE",
+    "QueueTriage",
     "ROTE_CLASSIFIER",
     "BacklogItem",
     "InvestigationDetail",
