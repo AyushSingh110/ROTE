@@ -23,6 +23,8 @@ from rote.service.scenario import (
     run_scenario,
 )
 from rote.service.session import (
+    LLM_MODE,
+    ROTE_CLASSIFIER,
     ResolutionView,
     SessionRuntime,
     live_session,
@@ -63,6 +65,12 @@ def verification_enabled() -> bool:
     return os.environ.get(VERIFY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+# an unreadable or unbuildable selection raises here, at startup, rather than turning into a
+# quiet fall back to the deterministic classifier that nobody would notice
+def llm_enabled() -> bool:
+    return os.environ.get(ROTE_CLASSIFIER, "").strip().lower() == LLM_MODE
+
+
 _READY: dict[str, float] = {}
 
 
@@ -89,7 +97,7 @@ def warmup() -> float:
     started = time.perf_counter()
     for scenario in ScenarioId:
         run_scenario(scenario)
-    live_session(verification_enabled())
+    live_session(verification_enabled(), llm_enabled())
     return time.perf_counter() - started
 
 
@@ -118,7 +126,13 @@ def create_app() -> FastAPI:
         return templates.TemplateResponse(
             request=request,
             name=name,
-            context={"banner": BANNER, "screens": SCREENS, **context},
+            context={
+                "banner": BANNER,
+                "screens": SCREENS,
+                "classifier_label": "Real LLM" if llm_enabled() else "Deterministic",
+                "classifier_model_id": session().classifier_model_id,
+                **context,
+            },
         )
 
     @app.get("/", response_class=HTMLResponse)
@@ -149,7 +163,7 @@ def create_app() -> FastAPI:
         )
 
     def session() -> SessionRuntime:
-        return live_session(verification_enabled())
+        return live_session(verification_enabled(), llm_enabled())
 
     def _known(exception_id: str) -> None:
         if exception_id not in {item.exception_id for item in session().backlog()}:
@@ -218,11 +232,13 @@ def create_app() -> FastAPI:
             "ledger_valid": runtime.ledger_view().valid,
             "research_grade": False,
             "verify_evidence": runtime.verifies_evidence,
+            "classifier": LLM_MODE if llm_enabled() else "deterministic",
+            "classifier_model_id": runtime.classifier_model_id,
         }
 
     @app.post("/api/reset")
     def reset() -> dict[str, Any]:
-        runtime = reset_session(verification_enabled())
+        runtime = reset_session(verification_enabled(), llm_enabled())
         return {
             "reset": True,
             "backlog": len(runtime.backlog()),

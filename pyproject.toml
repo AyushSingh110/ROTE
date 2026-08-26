@@ -187,3 +187,18 @@ source_modules = [
     "rote.service",
 ]
 forbidden_modules = ["rote.web"]
+
+[[tool.importlinter.contracts]]
+name = "the language-model adapter cannot reach anything that can act"
+type = "forbidden"
+source_modules = ["rote.agent.models.language"]
+forbidden_modules = [
+    "rote.safety",
+    "rote.domain",
+    "rote.runtime",
+    "rote.compiler",
+    "rote.recorder",
+    "rote.service",
+    "rote.web",
+    "rote.eval",
+]

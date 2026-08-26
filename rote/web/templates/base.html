@@ -9,7 +9,9 @@
 <body>
   <div class="banner">
     <span><span class="mode">DEMO MODE</span> &nbsp;{{ banner }}</span>
-    <span>Synthetic domain &middot; stand-in agent &middot; <b>no real payment rail</b></span>
+    <span>Synthetic domain &middot; <span class="mode">MODEL: {{ classifier_label }}</span>
+      <span class="mono">{{ classifier_model_id }}</span> &middot;
+      <b>no real payment rail</b></span>
   </div>
 
   <header class="masthead">

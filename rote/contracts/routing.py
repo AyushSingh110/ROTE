@@ -27,6 +27,10 @@ class RouteReason(StrEnum):
     # against it. Emitted by the verification boundary ahead of the router, never by the router.
     EVIDENCE_MISMATCH = "evidence_mismatch"
     EVIDENCE_UNVERIFIABLE = "evidence_unverifiable"
+    # the classifier could not be reached or answered with something unusable. Emitted by the
+    # caller of the classifier, never by the router, and never quietly: a provider outage is a
+    # visible refusal rather than a silent change of classifier.
+    CLASSIFIER_UNAVAILABLE = "classifier_unavailable"
     NO_ACTIVE_PLAN = "no_plan"
 
 

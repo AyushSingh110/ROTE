@@ -1,0 +1,98 @@
+{
+  "arms": {
+    "deterministic": {
+      "automated": 184,
+      "automation_coverage_per_mille": 368,
+      "cases": 500,
+      "classification_accuracy_per_mille": 880,
+      "classifications_scored": 500,
+      "classifier_calls": 500,
+      "compiled_steps_executed": 518,
+      "confidence_buckets": {
+        "900-1000": 500
+      },
+      "confusion": {
+        "duplicate_entry->duplicate_entry": 43,
+        "fee_mismatch->fee_mismatch": 124,
+        "fx_rounding->fx_rounding": 75,
+        "partial_payment->fee_mismatch": 60,
+        "timing_cutoff->timing_cutoff": 109,
+        "transposed_reference->transposed_reference": 89
+      },
+      "executions": 184,
+      "label": "deterministic",
+      "ledger_entries": 1036,
+      "ledger_valid": true,
+      "median_classification_ms": 0,
+      "model_id": "structured-fields-double-1",
+      "plan_lookups": 184,
+      "provider_failures": 0,
+      "refused": 316,
+      "route_reasons": {
+        "ambiguous_evidence": 316,
+        "plan_matched": 184
+      },
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "total_classification_ms": 0,
+      "undetermined_automated": 0,
+      "untrusted_withheld": 0,
+      "wrong_automated_actions": 0
+    },
+    "llm:qwen3:8b": {
+      "automated": 166,
+      "automation_coverage_per_mille": 332,
+      "cases": 500,
+      "classification_accuracy_per_mille": 510,
+      "classifications_scored": 500,
+      "classifier_calls": 500,
+      "compiled_steps_executed": 472,
+      "confidence_buckets": {
+        "800-900": 14,
+        "900-1000": 486
+      },
+      "confusion": {
+        "duplicate_entry->timing_cutoff": 23,
+        "duplicate_entry->transposed_reference": 20,
+        "fee_mismatch->timing_cutoff": 124,
+        "fx_rounding->fx_rounding": 70,
+        "fx_rounding->timing_cutoff": 5,
+        "partial_payment->fx_rounding": 3,
+        "partial_payment->timing_cutoff": 57,
+        "timing_cutoff->timing_cutoff": 96,
+        "timing_cutoff->transposed_reference": 13,
+        "transposed_reference->transposed_reference": 89
+      },
+      "executions": 166,
+      "label": "llm:qwen3:8b",
+      "ledger_entries": 944,
+      "ledger_valid": true,
+      "median_classification_ms": 4481,
+      "model_id": "ollama:qwen3:8b",
+      "plan_lookups": 166,
+      "provider_failures": 0,
+      "refused": 334,
+      "route_reasons": {
+        "ambiguous_evidence": 112,
+        "plan_matched": 166,
+        "precondition_contradiction": 222
+      },
+      "tokens_in": 229893,
+      "tokens_out": 9695,
+      "total_classification_ms": 11666691,
+      "undetermined_automated": 0,
+      "untrusted_withheld": 1000,
+      "wrong_automated_actions": 0
+    }
+  },
+  "cases": 500,
+  "corrections": [
+    "untrusted_withheld for the llm arm was recorded as 0 because the harness stripped the notes before building the request, leaving the adapter nothing to count. The harness now counts it. The value is a property of the dataset and the configuration, not of the run (500 cases x 2 untrusted blocks, withheld from a non-local model), so it was recomputed rather than re-measured. No other field was altered."
+  ],
+  "eval_seed": 91,
+  "experiment": "real language model as the upstream classifier",
+  "fit_count": 1500,
+  "fit_seed": 5,
+  "note": "Synthetic dataset, offline runtime, one local provider. Evidence verification is OFF in both arms so the deterministic arm reproduces the frozen V2 numbers exactly and the classifier is the only variable.",
+  "research_grade": false
+}

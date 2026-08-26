@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import functools
+import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from rote.agent.models.language import LLM_MODE, ROTE_CLASSIFIER, classifier_from_env
 from rote.bootstrap.evidence_corruption import EvidenceError, corrupt
 from rote.bootstrap.system import CompiledSystem
 from rote.contracts.canonical import canonical_hash
-from rote.contracts.classifier import ClassifierModel
+from rote.contracts.classifier import Classification, ClassifierModel
 from rote.contracts.common import (
     GENERATED_CATEGORIES,
     Currency,
     Domain,
     ExceptionCategory,
 )
+from rote.contracts.errors import ClassifierError
 from rote.contracts.execution import ExecutionOutcome, ExecutionResult, ResultVerdict
 from rote.contracts.ledger import LedgerEventType
 from rote.contracts.plan import Plan, PlanStep
@@ -30,6 +33,7 @@ from rote.contracts.routing import PlanSource, Route, RouteKind, RouteReason
 from rote.contracts.tools import Toolbox, ToolSpec
 from rote.domain.generators.divergence import DivergenceLabel, inject
 from rote.domain.tools.adapters import ReconciliationTools
+from rote.observability.logging import get_logger
 from rote.runtime.classifier import Classifier
 from rote.runtime.classifier_rules import StructuredFieldsClassifier
 from rote.runtime.evidence_check import VerificationOutcome, VerificationResult, verify
@@ -49,6 +53,8 @@ from rote.service.scenario import (
 
 FROZEN = ConfigDict(extra="forbid", frozen=True)
 COUNTS_MODEL_CALLS = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+_logger = get_logger("rote.service.session")
 
 
 # display text only: these DESCRIBE the predicates in rote.runtime.preconditions, they never
@@ -101,6 +107,9 @@ class RoutingPreview(BaseModel):
     route_detail: str
     plan_id: str | None
     plan_version: int | None
+    # how many untrusted blocks were kept away from the classifier, so withholding is
+    # something the runtime reports rather than something a reader has to infer
+    untrusted_withheld: int = 0
 
 
 class CallView(BaseModel):
@@ -157,6 +166,7 @@ class ResolutionView(BaseModel):
     ledger_before: int
     ledger_after: int
     ledger_valid: bool
+    untrusted_withheld: int = 0
 
 
 class LedgerEntryView(BaseModel):
@@ -274,6 +284,10 @@ class SessionRuntime:
         self._truth_for_demo = {t.exception_id: t.category for t in dataset.ground_truths}
 
     @property
+    def classifier_model_id(self) -> str:
+        return self._model.model_id
+
+    @property
     def classifier_is_local(self) -> bool:
         return bool(self._model.is_local)
 
@@ -372,7 +386,7 @@ class SessionRuntime:
     def preview(self, exception_id: str) -> RoutingPreview:
         exception = self._exception(exception_id)
         facts = exception.facts.model_dump(mode="json")
-        classification, route, _spy = self._route(exception, facts)
+        classification, route, _spy, withheld = self._route(exception, facts)
         fitting = _fitting(facts)
         return RoutingPreview(
             exception_id=exception_id,
@@ -386,6 +400,7 @@ class SessionRuntime:
             route_detail=route.detail,
             plan_id=route.plan_id,
             plan_version=route.plan_version,
+            untrusted_withheld=withheld,
         )
 
     def resolve(
@@ -416,13 +431,13 @@ class SessionRuntime:
                 self._resolved[exception_id] = view
                 return view
 
-        classification, route, spy = self._route(exception, facts)
+        classification, route, spy, withheld = self._route(exception, facts)
         fitting = _fitting(facts)
 
         if route.kind is not RouteKind.COMPILED_PLAN or route.plan_id is None:
             view = self._refusal(
                 exception_id, classification, route, fitting, spy, before_hash, before_entries
-            )
+            ).model_copy(update={"untrusted_withheld": withheld})
             self._resolved[exception_id] = view
             return view
 
@@ -457,7 +472,7 @@ class SessionRuntime:
             guard,
             before_hash,
             before_entries,
-        )
+        ).model_copy(update={"untrusted_withheld": withheld})
         self._resolved[exception_id] = view
         return view
 
@@ -555,17 +570,46 @@ class SessionRuntime:
 
     def _route(
         self, exception: ReconciliationException, facts: dict[str, Any]
-    ) -> tuple[Any, Route, _SpyPlanSource]:
-        classification = self._classifier.classify(
-            facts, exception.untrusted, exception.exception_id
-        )
+    ) -> tuple[Any, Route, _SpyPlanSource, int]:
         spy = _SpyPlanSource(self.registry)
+        # D5: merchant free text may reach a local model only. A hosted model is handed the
+        # structured evidence alone, and the count of what was kept back is reported.
+        untrusted = exception.untrusted if self._model.is_local else ()
+        withheld = len(exception.untrusted) - len(untrusted)
+        try:
+            classification = self._classifier.classify(facts, untrusted, exception.exception_id)
+        except Exception as error:
+            return (*self._classifier_down(exception.exception_id, error), spy, withheld)
         router = Router(
             plans=spy,
             domain=Domain.RECONCILIATION,
             min_confidence_per_mille=DEFAULT_MIN_CONFIDENCE_PER_MILLE,
         )
-        return classification, router.route(facts, classification), spy
+        return classification, router.route(facts, classification), spy, withheld
+
+    # a provider outage is a refusal, not a crash and not a quiet change of classifier: the
+    # router is never reached, so no plan can be looked up on an answer nobody gave
+    def _classifier_down(self, exception_id: str, error: Exception) -> tuple[Classification, Route]:
+        detail = f"the classifier could not be reached: {type(error).__name__}: {error}"[:200]
+        _logger.info(
+            "classifier_unavailable",
+            correlation_id=exception_id,
+            model_id=self._model.model_id,
+            error=type(error).__name__,
+        )
+        return (
+            Classification(
+                category=ExceptionCategory.UNKNOWN,
+                confidence_per_mille=0,
+                model_id=self._model.model_id,
+                prompt_template_id=self._model.prompt_template_id,
+            ),
+            Route(
+                kind=RouteKind.LIVE_AGENT,
+                reason=RouteReason.CLASSIFIER_UNAVAILABLE,
+                detail=detail,
+            ),
+        )
 
     # a read-only, category-free boundary: the gate's category=None rule allows exactly the
     # read tools, and no write tool is reachable from here
@@ -772,21 +816,39 @@ def _clock() -> Callable[[], datetime]:
     return tick
 
 
-@functools.lru_cache(maxsize=2)
-def live_session(verify_evidence: bool = False) -> SessionRuntime:
+# the flags are the cache key, so the model is rebuilt from the environment on a reset rather
+# than being carried over from a configuration that may since have changed
+@functools.lru_cache(maxsize=4)
+def live_session(verify_evidence: bool = False, use_llm: bool = False) -> SessionRuntime:
     return SessionRuntime(
-        system=compiled_system(), dataset=demo_dataset(), verify_evidence=verify_evidence
+        system=compiled_system(),
+        dataset=demo_dataset(),
+        classifier_model=configured_classifier() if use_llm else None,
+        verify_evidence=verify_evidence,
     )
+
+
+# raises rather than returning the deterministic classifier: asking for a model that cannot be
+# built is a deployment error, and hiding it behind a working default would make it invisible
+def configured_classifier() -> ClassifierModel:
+    model = classifier_from_env(os.environ)
+    if model is None:
+        raise ClassifierError(
+            f"{ROTE_CLASSIFIER} does not select a real model, so none can be built"
+        )
+    return model
 
 
 # a fresh world, gate, ledger and resolved-case cache for the next rehearsal. The compiled
 # system and the dataset are reused, so this costs no recompilation and grants no authority.
-def reset_session(verify_evidence: bool = False) -> SessionRuntime:
+def reset_session(verify_evidence: bool = False, use_llm: bool = False) -> SessionRuntime:
     live_session.cache_clear()
-    return live_session(verify_evidence)
+    return live_session(verify_evidence, use_llm)
 
 
 __all__ = [
+    "LLM_MODE",
+    "ROTE_CLASSIFIER",
     "BacklogItem",
     "InvestigationDetail",
     "LedgerView",
@@ -794,6 +856,7 @@ __all__ = [
     "RoutingPreview",
     "SessionRuntime",
     "WorldView",
+    "configured_classifier",
     "live_session",
     "reset_session",
 ]

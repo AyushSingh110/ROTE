@@ -195,7 +195,7 @@ class TestTheContractAdditionIsAdditive:
     def test_the_new_reasons_exist_and_are_distinct(self) -> None:
         assert RouteReason.EVIDENCE_MISMATCH.value == "evidence_mismatch"
         assert RouteReason.EVIDENCE_UNVERIFIABLE.value == "evidence_unverifiable"
-        assert len(set(RouteReason)) == 8
+        assert len(set(RouteReason)) == 9
 
 
 def test_the_session_never_judges_its_own_decisions() -> None:
