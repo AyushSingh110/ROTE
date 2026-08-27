@@ -17,3 +17,10 @@ dist/
 # local trajectory databases
 rote-trajectories.db
 *.db-journal
+
+# Personal working documents: build plans, presenter prep and superseded drafts.
+# They stay on disk for local use but are not part of the public repository.
+docs/CLAUDE.md
+docs/IMPLEMENTATION_PLAN.md
+docs/ARCHITECTURE_DRAFT.md
+docs/DEMO_CHEAT_SHEET.md

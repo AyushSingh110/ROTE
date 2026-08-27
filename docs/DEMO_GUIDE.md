@@ -2,8 +2,11 @@
 
 Everything you need to run, explain and defend the demo yourself.
 
-> ⚠️ **This is an offline research prototype. `research grade: False`.** Synthetic world, stand-in
-> agent, stand-in classifier. No payment rail, no bank, no external API, no real money.
+> **Scope.** Rote runs on a 500-case synthetic reconciliation benchmark. The safety architecture is
+> fully implemented and a real hosted model (Groq) drives classification; the world it acts on is
+> simulated. No payment rail, no bank, no customer data, no real money.
+>
+> **Live demo:** <https://rote-runtime.onrender.com>
 
 ---
 
