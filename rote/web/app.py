@@ -34,7 +34,7 @@ from rote.service.session import (
 )
 
 HERE = Path(__file__).parent
-BANNER = "Offline prototype — research grade: False"
+BANNER = "Synthetic benchmark — no real payment rail"
 SCREENS = ("investigation", "evidence", "decision")
 ADVERSARIAL = (
     (ScenarioId.SCHEMA_DRIFT, "A bank response gains a field", "Guard"),

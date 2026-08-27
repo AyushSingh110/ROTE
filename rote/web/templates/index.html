@@ -135,13 +135,14 @@
 <div class="panel limits">
   <h2>What this is not</h2>
   <ul>
-    <li><strong>research grade: False.</strong> The world, the agent and the classifier are
-      stand-ins written for this project. No number here is evidence about real reconciliation or
-      about language models.</li>
+    <li><strong>Synthetic benchmark, not production evidence.</strong> The financial world and
+      the fallback agent are deterministic stand-ins written for this project. The classifier is a
+      real hosted model. No number here is evidence about real reconciliation rates.</li>
     <li><strong>Rote is level with the agent on accuracy, never better</strong> &mdash; 500/500
       each. It trades coverage for the removal of confident errors.</li>
-    <li><strong>Not production.</strong> No payment rail, no bank, no external API, no credentials.
-      The only mutation boundary is an in-memory simulated world.</li>
+    <li><strong>Not production.</strong> No payment rail, no bank, no customer data, no real
+      money. The only mutation boundary is an in-memory simulated world. The single external call
+      is the classification request to the model.</li>
     <li><strong>No authentication.</strong> <span class="mono">human:ops-lead-42</span> is a naming
       convention for the approver, nothing more.</li>
   </ul>

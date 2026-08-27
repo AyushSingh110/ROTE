@@ -51,7 +51,7 @@ class TestTheHtmlScreens:
     def test_the_index_loads(self, client: TestClient) -> None:
         response = client.get("/")
         assert response.status_code == 200
-        assert "research grade: False" in response.text
+        assert "Synthetic benchmark" in response.text
 
     @pytest.mark.parametrize("scenario", [s.value for s in ScenarioId])
     @pytest.mark.parametrize("screen", ["investigation", "evidence", "decision"])
@@ -61,7 +61,7 @@ class TestTheHtmlScreens:
         response = client.get(f"/s/{scenario}/{screen}")
         assert response.status_code == 200
         assert "Traceback" not in response.text
-        assert "research grade: False" in response.text
+        assert "Synthetic benchmark" in response.text
 
     def test_the_refusal_screen_states_the_reason_plainly(self, client: TestClient) -> None:
         page = client.get("/s/ambiguous/decision").text
@@ -237,7 +237,7 @@ class TestPresentationAffordances:
             "Does exactly one procedure fit the evidence",
             "AUTOMATE",
             "REFUSE AUTOMATION",
-            "research grade: False",
+            "Synthetic benchmark",
         ):
             assert phrase in page, f"landing page is missing: {phrase}"
 
@@ -376,5 +376,5 @@ class TestTheSandboxControls:
         for path in ("/", "/queue", "/ledger", f"/live/{first}", "/s/ambiguous/decision"):
             page = client.get(path).text
             assert "DEMO MODE" in page
-            assert "research grade: False" in page
+            assert "Synthetic benchmark" in page
             assert "no real payment rail" in page

@@ -537,3 +537,111 @@ Reset first. Speak plainly.
 
 **If the live demo fails entirely:** the six scripted scenarios at `/s/<id>/decision` do not touch
 the live session and will still work. Fall back to those.
+
+---
+
+## Proving the model is really being used
+
+A judge's fair question is "how do I know a real model is in this loop, and not a hard-coded
+answer?" Four independent ways to show it, strongest last.
+
+**1. The banner.** Every page carries `MODEL: Real LLM  groq:openai/gpt-oss-120b`.
+
+**2. The health endpoint**, served by the application itself:
+
+```bash
+curl -s http://127.0.0.1:7860/health
+```
+
+`"classifier": "llm"` and `"classifier_model_id": "groq:openai/gpt-oss-120b"`.
+
+**3. The classification is shown per case.** The decision screen prints what the model said and how
+confident it was — `timing_cutoff @ 950/1000`. Resolve two different cases and the answers differ.
+
+**4. The timing tells the truth.** This is the strongest one, because it cannot be faked by a
+hard-coded string:
+
+| Action | Latency | Why |
+|---|---|---|
+| Automate a clean case | **~1.5–2 s** | a live network call to the model |
+| Refuse corrupted evidence | **under 100 ms** | verification refuses *before* the model is called |
+
+Say it out loud while demonstrating: *"That refusal took fifty milliseconds because Rote never
+asked the model. It checked the evidence against the record first and stopped there."*
+
+**5. Kill it and show it fails closed.** Optional, powerful, and safe. Start a second container with
+no credential:
+
+```bash
+docker run --rm -p 9002:7860 -e ROTE_CLASSIFIER=llm -e ROTE_LLM_PROVIDER=groq rote:demo
+```
+
+`/health` reports `ready: false` with `warmup_error` naming the missing variable, and every page
+returns a warming state. Nothing is served on a broken provider — it does not quietly fall back to
+the deterministic classifier.
+
+---
+
+## Recording the video
+
+**Record from the local container, not from the public URL.** The public deployment is for judges to
+click afterwards; recording against it adds a cold start, a rate limit and a flaky free-tier edge
+that you cannot control mid-take.
+
+### Before you hit record
+
+```bash
+docker rm -f rote-demo 2>/dev/null
+docker run -d --name rote-demo -p 7860:7860 \
+  -e ROTE_CLASSIFIER=llm -e ROTE_LLM_PROVIDER=groq \
+  -e ROTE_LLM_MODEL=openai/gpt-oss-120b -e ROTE_VERIFY_EVIDENCE=1 \
+  -e GROQ_API_KEY="$GROQ_API_KEY" rote:demo
+```
+
+Wait about 48 seconds, then confirm all six fields:
+
+```bash
+curl -s http://127.0.0.1:7860/health
+# ready:true · classifier:llm · classifier_model_id:groq:openai/gpt-oss-120b
+# verify_evidence:true · ledger_valid:true · ledger_entries:0
+```
+
+Checklist:
+
+- [ ] `ledger_entries` is **0** — if not, `curl -X POST http://127.0.0.1:7860/api/reset`
+- [ ] Browser at **100% zoom**, one window, no extra tabs, bookmarks bar hidden
+- [ ] Notifications silenced (Windows: Focus assist on)
+- [ ] Screen at **1920×1080**
+- [ ] Rehearse the click path once, then reset again
+
+### Capture
+
+Windows Game Bar (built in) is enough: **Win + G** → record. For better control use **OBS Studio**
+(free): Display Capture, 1920×1080, 30 fps, and record the microphone on a separate track so you can
+redo narration without redoing the screen.
+
+Rate limit note: the demo key allows roughly **nine model calls per minute**. The sequence below
+uses four. Do not rehearse immediately before recording without pausing a minute.
+
+### The sequence — five minutes
+
+| # | Screen | Do | Say |
+|---|---|---|---|
+| 1 | `/` | Point at the banner | "A real model classifies. Everything after it is deterministic code." |
+| 2 | `/` | Scroll to the v1 → v2 table | "Our first version automated all 500 and was **confidently wrong 60 times**. Every safety layer passed those sixty." |
+| 3 | `/queue` | Scroll the list | "Most of these already say REFUSE — decided by the evidence alone, before any model is asked." |
+| 4 | `EXC-000004` → Resolve | Let the ~2 s pause show | "That pause is the live model call." Then: one procedure fits, Guard, Gate, 2 steps, ledger entry. |
+| 5 | `EXC-000000` → Resolve | Point at the numbers | "The model answered confidently. Two procedures fit the same evidence, so **plan lookups: zero**. Nothing executed." |
+| 6 | `EXC-000011` → corrupt → Resolve | Point at the latency | "Fifty milliseconds. Rote never asked the model — it checked the evidence against the record and refused first." |
+| 7 | Restore → Resolve | | "Same case, honest evidence, automates again." |
+| 8 | `/ledger` | Show the chain | "Intent before outcome, hash-chained, and it verifies." |
+
+**Closing line:** *"The model can make a decision. Rote decides whether that decision deserves
+authority."*
+
+### If something goes wrong mid-take
+
+- **Everything escalates with `classifier_unavailable`** — you hit the rate limit. Wait 60 seconds.
+  This is Rote failing closed correctly; you can even keep it in and explain it.
+- **A case says "already resolved"** — you resolved it in rehearsal. Reset and start again.
+- **The page says "warming up"** — the container restarted. Wait 48 seconds.
