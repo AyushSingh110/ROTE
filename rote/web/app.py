@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import collections
+import csv
 import dataclasses
+import io
 import os
 import time
 from collections.abc import AsyncIterator
@@ -10,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -262,6 +265,79 @@ def create_app() -> FastAPI:
         _known(exception_id)
         session().resolve(exception_id)
         return RedirectResponse(url=f"/live/{exception_id}", status_code=303)
+
+    @app.get("/exceptions", response_class=HTMLResponse)
+    def exceptions_page(request: Request) -> HTMLResponse:
+        runtime = session()
+        rows = runtime.exception_report()
+        backlog = runtime.backlog()
+        counted = collections.Counter(row.reason for row in rows)
+        return page(
+            request,
+            "exceptions.html",
+            rows=rows,
+            total=len(backlog),
+            automated=sum(1 for item in backlog if item.status == "automated"),
+            worked=sum(1 for row in rows if row.worked)
+            + sum(1 for item in backlog if item.status == "automated"),
+            reasons=sorted(counted.items(), key=lambda pair: (-pair[1], pair[0])),
+        )
+
+    # the exception list an operator would actually take away with them
+    @app.get("/api/exceptions.csv", response_class=PlainTextResponse)
+    def exceptions_csv() -> PlainTextResponse:
+        rows = session().exception_report()
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, lineterminator="\n")
+        writer.writerow(
+            [
+                "exception_id",
+                "status",
+                "worked",
+                "reason",
+                "fitting_count",
+                "fitting_categories",
+                "internal_minor_units",
+                "internal_currency",
+                "bank_minor_units",
+                "bank_currency",
+                "captured_on",
+                "plan_lookups",
+                "compiled_steps_executed",
+            ]
+        )
+        for row in rows:
+            writer.writerow(
+                [
+                    row.exception_id,
+                    row.status,
+                    "yes" if row.worked else "no",
+                    row.reason,
+                    row.fitting_count,
+                    " | ".join(row.fitting_categories),
+                    row.internal_minor_units,
+                    row.internal_currency,
+                    "" if row.bank_minor_units is None else row.bank_minor_units,
+                    row.bank_currency or "",
+                    row.captured_on,
+                    row.plan_lookups,
+                    row.compiled_steps_executed,
+                ]
+            )
+        return PlainTextResponse(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={"content-disposition": 'attachment; filename="rote-exceptions.csv"'},
+        )
+
+    @app.get("/api/exceptions")
+    def exceptions_json() -> dict[str, Any]:
+        rows = session().exception_report()
+        return {
+            "unresolved": len(rows),
+            "reasons": dict(collections.Counter(row.reason for row in rows)),
+            "items": [row.model_dump() for row in rows],
+        }
 
     @app.get("/ledger", response_class=HTMLResponse)
     def ledger_page(request: Request) -> HTMLResponse:

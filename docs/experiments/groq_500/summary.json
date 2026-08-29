@@ -1,0 +1,116 @@
+{
+  "arms": {
+    "deterministic": {
+      "automated": 184,
+      "automation_coverage_per_mille": 368,
+      "cases": 500,
+      "classification_accuracy_per_mille": 854,
+      "classifications_scored": 411,
+      "classifier_calls": 411,
+      "compiled_steps_executed": 518,
+      "confidence_buckets": {
+        "900-1000": 411
+      },
+      "confusion": {
+        "duplicate_entry->duplicate_entry": 43,
+        "fee_mismatch->fee_mismatch": 124,
+        "fx_rounding->fx_rounding": 75,
+        "partial_payment->fee_mismatch": 60,
+        "timing_cutoff->timing_cutoff": 109
+      },
+      "executions": 184,
+      "label": "deterministic",
+      "ledger_entries": 3079,
+      "ledger_valid": true,
+      "median_classification_ms": 28,
+      "model_id": "structured-fields-double-1",
+      "plan_lookups": 184,
+      "provider_failures": 0,
+      "refused": 316,
+      "route_reasons": {
+        "ambiguous_evidence": 227,
+        "evidence_unverifiable": 89,
+        "plan_matched": 184
+      },
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "total_classification_ms": 14509,
+      "undetermined_automated": 0,
+      "untrusted_withheld": 0,
+      "verification_mismatch": 0,
+      "verification_refusals": 89,
+      "verification_unverifiable": 89,
+      "wrong_automated_actions": 0
+    },
+    "groq:openai/gpt-oss-120b": {
+      "automated": 174,
+      "automation_coverage_per_mille": 348,
+      "cases": 500,
+      "classification_accuracy_per_mille": 811,
+      "classifications_scored": 391,
+      "classifier_calls": 411,
+      "compiled_steps_executed": 484,
+      "confidence_buckets": {
+        "0-200": 20,
+        "600-700": 16,
+        "700-800": 34,
+        "800-900": 131,
+        "900-1000": 210
+      },
+      "confusion": {
+        "duplicate_entry->duplicate_entry": 20,
+        "duplicate_entry->timing_cutoff": 20,
+        "duplicate_entry->unknown": 3,
+        "fee_mismatch->fee_mismatch": 119,
+        "fee_mismatch->unknown": 5,
+        "fx_rounding->fx_rounding": 68,
+        "fx_rounding->unknown": 7,
+        "partial_payment->fee_mismatch": 54,
+        "partial_payment->partial_payment": 4,
+        "partial_payment->unknown": 2,
+        "timing_cutoff->timing_cutoff": 106,
+        "timing_cutoff->unknown": 3
+      },
+      "executions": 174,
+      "label": "groq:openai/gpt-oss-120b",
+      "ledger_entries": 3011,
+      "ledger_valid": true,
+      "median_classification_ms": 6393,
+      "model_id": "groq:openai/gpt-oss-120b",
+      "plan_lookups": 174,
+      "provider_failures": 20,
+      "refused": 326,
+      "route_reasons": {
+        "ambiguous_evidence": 201,
+        "classifier_unavailable": 20,
+        "evidence_unverifiable": 89,
+        "low_classifier_confidence": 16,
+        "plan_matched": 174
+      },
+      "tokens_in": 194249,
+      "tokens_out": 107987,
+      "total_classification_ms": 7056663,
+      "undetermined_automated": 0,
+      "untrusted_withheld": 1000,
+      "verification_mismatch": 0,
+      "verification_refusals": 89,
+      "verification_unverifiable": 89,
+      "wrong_automated_actions": 0
+    }
+  },
+  "configuration": {
+    "cases": 500,
+    "classifier": "llm",
+    "eval_seed": 91,
+    "fit_count": 1500,
+    "fit_seed": 5,
+    "model": "openai/gpt-oss-120b",
+    "provider": "groq",
+    "verify_evidence": true
+  },
+  "experiment": "full-batch measurement in the production configuration",
+  "note": "Nothing was tuned for this run. Prompt, thresholds, routing and ambiguity rules are exactly those the deployed application uses. The deterministic arm is re-run here with verification ON, so it is NOT identical to the frozen V2 baseline, which ran with verification OFF.",
+  "rate_limit_waits": 161,
+  "research_grade": false,
+  "wall_seconds_llm_arm": 7061.7
+}

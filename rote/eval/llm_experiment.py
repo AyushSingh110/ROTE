@@ -24,12 +24,13 @@ from rote.contracts.classifier import ClassifierModel
 from rote.contracts.common import Domain, ExceptionCategory
 from rote.contracts.errors import ClassifierError
 from rote.contracts.execution import ExecutionOutcome
-from rote.contracts.policy import ExecutionPath
+from rote.contracts.policy import ExecutionPath, PolicyContext
 from rote.contracts.reconciliation import GeneratedDataset, ReconciliationException
 from rote.contracts.routing import RouteKind, RouteReason
 from rote.domain.checkers.reconciliation import check_outcome
 from rote.domain.tools.adapters import ReconciliationTools
 from rote.runtime.classifier import Classifier
+from rote.runtime.evidence_check import VerificationOutcome, verify
 from rote.runtime.executor import execute_plan
 from rote.runtime.guard import Guard, default_guard_config
 from rote.runtime.router import DEFAULT_MIN_CONFIDENCE_PER_MILLE, Router
@@ -51,6 +52,7 @@ class CaseRecord:
     steps_executed: int
     classifier_failed: bool
     elapsed_ms: int
+    verification: str = "not_run"
 
 
 @dataclass
@@ -68,6 +70,9 @@ class ArmResult:
     executions: int = 0
     steps_executed: int = 0
     provider_failures: int = 0
+    verification_refusals: int = 0
+    verification_mismatch: int = 0
+    verification_unverifiable: int = 0
     classifier_calls: int = 0
     untrusted_withheld: int = 0
     tokens_in: int = 0
@@ -106,6 +111,7 @@ def run_arm(
     dataset: GeneratedDataset,
     model: ClassifierModel,
     limit: int | None = None,
+    verify_evidence: bool = False,
 ) -> ArmResult:
     exceptions: Sequence[ReconciliationException] = dataset.exceptions[
         : limit or len(dataset.exceptions)
@@ -133,6 +139,53 @@ def run_arm(
 
         started = time.perf_counter()
         failed = False
+        if verify_evidence:
+            checked = verify(
+                exception.facts,
+                gate.for_task(
+                    PolicyContext(
+                        task_id=exception.exception_id,
+                        correlation_id=f"{exception.exception_id}:verification",
+                        path=ExecutionPath.COMPILED_PLAN,
+                        category=None,
+                        actor="system:verifier",
+                    )
+                ),
+            )
+            if checked.outcome is not VerificationOutcome.AGREEMENT:
+                mismatch = checked.outcome is VerificationOutcome.MISMATCH
+                result.verification_refusals += 1
+                if mismatch:
+                    result.verification_mismatch += 1
+                else:
+                    result.verification_unverifiable += 1
+                result.cases += 1
+                result.refused += 1
+                reason_name = (
+                    RouteReason.EVIDENCE_MISMATCH.value
+                    if mismatch
+                    else RouteReason.EVIDENCE_UNVERIFIABLE.value
+                )
+                result.route_reasons[reason_name] += 1
+                elapsed = int((time.perf_counter() - started) * 1000)
+                result.latencies_ms.append(elapsed)
+                result.records.append(
+                    CaseRecord(
+                        exception_id=exception.exception_id,
+                        true_category=truth.category.value,
+                        said_category="",
+                        confidence_per_mille=0,
+                        route_reason=reason_name,
+                        automated=False,
+                        verdict="not_attempted",
+                        plan_lookups=0,
+                        steps_executed=0,
+                        classifier_failed=False,
+                        elapsed_ms=elapsed,
+                        verification=checked.outcome.value,
+                    )
+                )
+                continue
         try:
             classification = classifier.classify(facts, untrusted, exception.exception_id)
             route = router.route(facts, classification)
@@ -235,6 +288,9 @@ def summary(result: ArmResult) -> dict[str, Any]:
         "executions": result.executions,
         "compiled_steps_executed": result.steps_executed,
         "provider_failures": result.provider_failures,
+        "verification_refusals": result.verification_refusals,
+        "verification_mismatch": result.verification_mismatch,
+        "verification_unverifiable": result.verification_unverifiable,
         "classifier_calls": result.classifier_calls,
         "untrusted_withheld": result.untrusted_withheld,
         "tokens_in": result.tokens_in,

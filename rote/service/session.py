@@ -92,6 +92,26 @@ class QueueTriage(BaseModel):
     status: str
 
 
+class ExceptionRow(BaseModel):
+    """One case Rote did not automate, and why."""
+
+    model_config = FROZEN
+
+    exception_id: str
+    status: str
+    worked: bool
+    reason: str
+    fitting_categories: tuple[str, ...]
+    fitting_count: int
+    internal_minor_units: int
+    internal_currency: str
+    bank_minor_units: int | None
+    bank_currency: str | None
+    captured_on: str
+    plan_lookups: int
+    compiled_steps_executed: int
+
+
 class BacklogItem(BaseModel):
     model_config = FROZEN
 
@@ -410,6 +430,51 @@ class SessionRuntime:
             eligible=len(fitting) == 1,
             status=self._status(exception_id),
         )
+
+    # The exception list the operator actually needs. It is built from the evidence and from
+    # decisions already taken, so it costs no model call and writes nothing. For a case that has
+    # been run the recorded route reason is used; for one that has not, the reason is what the
+    # evidence alone already implies, and `worked` says which of the two a row is.
+    def exception_report(self, *, unresolved_only: bool = True) -> tuple[ExceptionRow, ...]:
+        rows: list[ExceptionRow] = []
+        for exception in self._dataset.exceptions:
+            exception_id = exception.exception_id
+            decided = self._resolved.get(exception_id)
+            fitting = _fitting(exception.facts.model_dump(mode="json"))
+            automated = decided is not None and decided.decision is Decision.AUTOMATE
+            if unresolved_only and automated:
+                continue
+            if decided is not None:
+                reason = decided.route_reason.value
+            elif len(fitting) > 1:
+                reason = RouteReason.AMBIGUOUS_EVIDENCE.value
+            elif not fitting:
+                reason = RouteReason.UNKNOWN_CATEGORY.value
+            else:
+                reason = "eligible"
+            if unresolved_only and decided is None and reason == "eligible":
+                continue
+            bank = exception.facts.bank_amount
+            rows.append(
+                ExceptionRow(
+                    exception_id=exception_id,
+                    status=self._status(exception_id),
+                    worked=decided is not None,
+                    reason=reason,
+                    fitting_categories=fitting,
+                    fitting_count=len(fitting),
+                    internal_minor_units=exception.facts.internal_amount.minor_units,
+                    internal_currency=exception.facts.internal_amount.currency.value,
+                    bank_minor_units=None if bank is None else bank.minor_units,
+                    bank_currency=None if bank is None else bank.currency.value,
+                    captured_on=exception.facts.captured_on.isoformat(),
+                    plan_lookups=0 if decided is None else decided.plan_lookups,
+                    compiled_steps_executed=(
+                        0 if decided is None else decided.compiled_steps_executed
+                    ),
+                )
+            )
+        return tuple(rows)
 
     # routing only: no plan is executed, no tool is called, nothing is written
     def preview(self, exception_id: str) -> RoutingPreview:
@@ -884,6 +949,7 @@ def reset_session(verify_evidence: bool = False, use_llm: bool = False) -> Sessi
 
 __all__ = [
     "LLM_MODE",
+    "ExceptionRow",
     "QueueTriage",
     "ROTE_CLASSIFIER",
     "BacklogItem",

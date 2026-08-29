@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Exception report{% endblock %}
+{% block subtitle %}&mdash; exception report{% endblock %}
+{% block strapline %}Every case Rote did not automate, with the reason. Built from the evidence and
+from decisions already taken, so listing it costs no model call.{% endblock %}
+{% block content %}
+
+<nav class="steps">
+  <a href="/queue">&larr; Queue</a>
+  <a href="/ledger">Ledger</a>
+  <a href="/api/exceptions.csv">Download CSV</a>
+</nav>
+
+<div class="grid2">
+  <div class="panel">
+    <h2>Batch outcome</h2>
+    <dl class="kv">
+      <dt>Records in batch</dt><dd>{{ total }}</dd>
+      <dt>Automated</dt><dd>{{ automated }} &middot; match rate
+        <strong>{{ '%.1f'|format(100 * automated / total) }}%</strong></dd>
+      <dt>Not automated</dt><dd>{{ rows|length }}</dd>
+      <dt>Worked so far</dt><dd>{{ worked }} of {{ total }}</dd>
+    </dl>
+    <p class="note">A row is <em>decided</em> once the case has been run. Until then the reason
+      shown is what the evidence alone already implies &mdash; no model has been asked.</p>
+  </div>
+  <div class="panel">
+    <h2>Why they were not automated</h2>
+    <div class="scroll">
+      <table>
+        <tr><th>Reason</th><th class="num">Cases</th></tr>
+        {% for reason, count in reasons %}
+        <tr><td class="mono">{{ reason }}</td><td class="num">{{ count }}</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>The exceptions &mdash; showing {{ rows|length }}</h2>
+  <div class="scroll">
+    <table>
+      <tr>
+        <th>Case</th><th>Status</th><th>Reason</th><th>Procedures that fit</th>
+        <th class="num">Internal</th><th class="num">Bank</th><th>Captured</th>
+        <th class="num">Lookups</th><th class="num">Steps</th>
+      </tr>
+      {% for row in rows %}
+      <tr>
+        <td class="mono"><a href="/live/{{ row.exception_id }}">{{ row.exception_id }}</a></td>
+        <td>{{ row.status }}{% if not row.worked %} <span class="note">(predicted)</span>{% endif %}</td>
+        <td class="mono">{{ row.reason }}</td>
+        <td>{{ row.fitting_categories|join(', ') or '&mdash;'|safe }}</td>
+        <td class="num mono">{{ row.internal_minor_units }} {{ row.internal_currency }}</td>
+        <td class="num mono">{% if row.bank_minor_units is none %}&mdash;{% else %}
+          {{ row.bank_minor_units }} {{ row.bank_currency }}{% endif %}</td>
+        <td class="mono">{{ row.captured_on }}</td>
+        <td class="num">{{ row.plan_lookups }}</td>
+        <td class="num">{{ row.compiled_steps_executed }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  <p class="note">Ambiguous rows name the procedures that both fit the same evidence. That is the
+    information the human picking the case up actually needs, and it is why the registry was never
+    consulted: <strong>plan lookups stay at zero</strong>.</p>
+</div>
+
+{% endblock %}

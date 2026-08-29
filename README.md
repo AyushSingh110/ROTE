@@ -16,7 +16,22 @@ verification → ambiguity check → compiled plan → Guard → Policy Gate →
 > data, no real money. Every number below is a reproducible measurement on that benchmark, not a
 > claim about production reconciliation rates. See [Limitations](#limitations).
 
-<sub>Python 3.11 · FastAPI · Jinja2 · Pydantic · Groq · no agent framework · **1,256 tests** ·
+### Measured on the full 500-record batch, real model, verification on
+
+| | |
+|---|---|
+| Records processed | **500** |
+| **Match rate** (automated) | **34.8%** — 174 records |
+| **Precision of automated actions** | **100%** — 0 wrong of 174 |
+| Model classification accuracy | **81.1%** |
+| **Wrong money movements** | **0** |
+| Exceptions returned with a reason | **326** |
+
+The model's most common mistake — `partial_payment` read as `fee_mismatch` — happened **54 times**.
+That is the exact error that produced 60 wrong actions in our first version. **None of the 54
+became a financial action.**
+
+<sub>Python 3.11 · FastAPI · Jinja2 · Pydantic · Groq · no agent framework · **1,277 tests** ·
 **12 enforced architecture contracts** · `mypy --strict` · zero-dependency LLM adapter</sub>
 
 ---
@@ -270,25 +285,44 @@ claiming near-certainty, and **222 of those wrong answers were vetoed before a p
 > — because the model was never the authority.
 
 **This is not a claim that language models classify payment exceptions badly.** `qwen3:8b` is a small
-model on modest hardware. A stronger model scores far higher — and would not change the safety
-result, which is the point: **the containment does not depend on the model being good.**
+model on modest hardware, and the hosted model below scores 81.1% on the same queue. The safety
+result is identical for both: **the containment does not depend on the model being good.**
 
-**A curated 12-case matrix through the complete runtime with the hosted model
-(`openai/gpt-oss-120b` via Groq), evidence verification ON:**
+### The full batch, in the configuration that is deployed
 
-| Case type | Decision | Route reason | Plan lookups | Steps |
-|---|---|---|---|---|
-| Eligible × 6 | automate | `plan_matched` | 1 | 2–4 |
-| Ambiguous × 2 | refuse | `ambiguous_evidence` | **0** | 0 |
-| Unverifiable × 1 | refuse | `evidence_unverifiable` | **0** | 0 |
-| Corrupted × 2 | refuse | `evidence_mismatch` | **0** | 0 |
-| Repeat | already resolved | — | 0 | 0 |
-| Schema drift | refuse | Guard rejected the result | 1 | **0** |
-| Cap breach | refuse | Gate refused the amount | 1 | **0** |
+500 records, Groq `openai/gpt-oss-120b`, evidence verification ON, nothing tuned for the run:
 
-**Refusals that reached a plan lookup: 0. Refusals that executed a step: 0.** Corruption refusals
-completed in under 100 ms — verification runs before the classifier, so a corrupted case never costs
-a model call.
+| Metric | Deterministic | **Groq** |
+|---|---|---|
+| Records | 500 | **500** |
+| **Match rate** | 36.8% (184) | **34.8% (174)** |
+| **Precision of automated actions** | 100% | **100%** |
+| Model classification accuracy | 85.4% | **81.1%** |
+| **Wrong automated actions** | **0** | **0** |
+| Provider failures | 0 | 20 (rate limit, failed closed) |
+| Untrusted blocks withheld | 0 | **1000** |
+| Ledger valid | yes | **yes** |
+
+**The exception list — 326 records Rote would not automate, each with a reason:**
+
+| Reason | Count | Meaning |
+|---|---|---|
+| `ambiguous_evidence` | **201** | two procedures fit the same evidence |
+| `evidence_unverifiable` | **89** | evidence named a bank line the record could not confirm |
+| `classifier_unavailable` | **20** | provider unreachable; refused rather than guessed |
+| `low_classifier_confidence` | **16** | model answered below the 700/1000 threshold |
+| `evidence_mismatch` | **0** | no clean record disagreed with its source |
+
+**Every one of those 326 reached zero plan lookups and executed zero steps.** The full report is
+browsable at `/exceptions` and downloadable as CSV at `/api/exceptions.csv`.
+
+**What refusing costs**, computed from the frozen baselines and pinned by a test:
+
+> **4.3 correct automations given up for every wrong money movement prevented** — 256 given up,
+> 60 prevented. All 60 of v1's errors are inside the refused set; none survived.
+
+Measured latency, without the rate-limit pacing used during the batch: **~1.0–1.5 s** for an
+automated case, **~0.04 s** for a verification refusal — which never calls the model at all.
 
 **Prompt injection.** A research-only probe fed a real model the merchant notes it is normally
 denied. Accuracy fell from **58% to 18%**, and **44 of 50 answers changed**. One case is the whole
@@ -414,8 +448,10 @@ Stated plainly, because a safety argument that hides its own boundaries is not a
 - **These results do not establish production financial safety.** They demonstrate the architecture
   and its measured behaviour on a controlled benchmark. Real-world failure rates are unknown.
 - **The fallback agent is still a deterministic stand-in.** Only the classifier is a real model.
-- **The real-model numbers are one model, one dataset, one seed** — and the hosted matrix is 12
-  curated cases, not a 500-case sweep.
+- **The real-model numbers are one model, one dataset, one seed.** The full batch was measured
+  once; hosted models are not reproducible run to run.
+- **20 of 500 cases hit the provider rate limit** and failed closed. On a production key that
+  number would be lower, but it is what this deployment actually measured.
 - **Hosted models are not reproducible.** `openai/gpt-oss-120b` returned different answers for the
   same case across runs at temperature 0. Every one of those answers was refused by the ambiguity
   rule, so the *decision* was stable while the *classification* was not.
@@ -455,7 +491,7 @@ infrastructure.**
 ## Development
 
 ```bash
-conda run -n rote python -m pytest        # 1,256 tests
+conda run -n rote python -m pytest        # 1,277 tests
 conda run -n rote ruff check rote tests
 conda run -n rote ruff format --check rote tests
 conda run -n rote mypy rote              # strict
@@ -469,7 +505,8 @@ conda run -n rote lint-imports           # 12 architecture contracts
 | [`docs/JOURNAL.md`](docs/JOURNAL.md) | The full engineering record — including experiments that failed and claims that were retracted |
 | [`docs/DEMO_GUIDE.md`](docs/DEMO_GUIDE.md) | Setup, warmup, health, reset, troubleshooting |
 | [`docs/DEPLOY_RENDER.md`](docs/DEPLOY_RENDER.md) | Public deployment, measured timings and limits |
-| [`docs/experiments/real_llm/`](docs/experiments/real_llm/) | Real-model measurements and the adversarial probe |
+| [`docs/experiments/groq_500/`](docs/experiments/groq_500/) | **The full 500-record batch result in the deployed configuration** |
+| [`docs/experiments/real_llm/`](docs/experiments/real_llm/) | Earlier local-model sweep and the adversarial probe |
 | [`docs/baselines/`](docs/baselines/) | Immutable v1 / v2 run logs with checksums |
 
 ## License
