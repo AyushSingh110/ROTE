@@ -1,1 +1,7 @@
 * text=auto eol=lf
+
+# Research artifacts are checksummed, so git must never rewrite a single byte of them.
+# Without this, a line-ending conversion changes the file's hash and the frozen results
+# fail verification on a machine with different settings.
+docs/baselines/**       -text
+docs/experiments/**     -text
