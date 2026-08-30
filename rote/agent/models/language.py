@@ -419,10 +419,17 @@ def tls_context() -> ssl.SSLContext:
     try:
         return ssl.create_default_context()
     except ssl.SSLError:
+        # enum_certificates ships only on Windows, which is also the only platform with the
+        # broken-root problem this works around. Looked up at run time rather than guarded by
+        # sys.platform so the module type-checks the same on every platform. Anywhere else a
+        # failure here is real, and there is no second way to build a verifying context.
+        read_windows_roots = getattr(ssl, "enum_certificates", None)
+        if read_windows_roots is None:
+            raise
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
-        for certificate, _encoding, _trust in ssl.enum_certificates("ROOT"):
+        for certificate, _encoding, _trust in read_windows_roots("ROOT"):
             try:
                 context.load_verify_locations(cadata=certificate)
             except ssl.SSLError:
