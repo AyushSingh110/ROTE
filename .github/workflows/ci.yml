@@ -1,0 +1,239 @@
+name: CI
+
+# Every gate that has to hold before this project can be trusted, run on every push.
+# Nothing here needs a credential: the whole test suite is offline by design, and the
+# container is booted on the deterministic classifier so no provider key is required.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# a newer push makes an in-flight run pointless, except on main where every commit is a record
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ---------------------------------------------------------------- fast gates
+  quality:
+    name: Lint, types, architecture
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        # requirements.txt is installed LAST on purpose: it carries the pins the test suite is
+        # actually green against, and it must win over the looser pins in pyproject.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install -r requirements.txt
+
+      - name: Report dependency drift
+        # visible, not fatal: pyproject and requirements.txt disagree on pydantic today
+        continue-on-error: true
+        run: |
+          echo "Installed versions the gates below actually ran against:"
+          pip show pydantic fastapi structlog 2>/dev/null | grep -E "^(Name|Version)" || true
+          echo
+          echo "pyproject pin : $(grep -oE 'pydantic==[0-9.]+' pyproject.toml || echo none)"
+          echo "requirements  : $(grep -oE 'pydantic==[0-9.]+' requirements.txt || echo none)"
+
+      - name: ruff check
+        run: ruff check rote tests
+
+      - name: ruff format
+        run: ruff format --check rote tests
+
+      - name: mypy --strict
+        run: mypy rote
+
+      - name: Architecture contracts
+        # the dependency direction is enforced by a tool, not by convention
+        run: lint-imports
+
+  # ---------------------------------------------------------------- the suite
+  tests:
+    name: Test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install -r requirements.txt
+
+      - name: pytest
+        # no network and no credentials: any test that needed either would fail here, which is
+        # the point. The provider adapter is exercised through an injected fake transport.
+        env:
+          ROTE_CLASSIFIER: deterministic
+        run: pytest -q --durations=10
+
+  # ---------------------------------------------------------------- the evidence
+  evidence:
+    name: Frozen results and secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Frozen baselines are unchanged
+        # V1 and V2 are the published research record. If a checksum moves, a result was edited,
+        # and that must break the build rather than pass quietly.
+        run: |
+          status=0
+          for dir in docs/baselines/*/ docs/experiments/*/; do
+            [ -f "$dir/SHA256SUMS.txt" ] || continue
+            echo "--- $dir"
+            ( cd "$dir" && sha256sum -c SHA256SUMS.txt ) || status=1
+          done
+          exit $status
+
+      - name: Every result file is covered by a checksum
+        # a result added later without being recorded would otherwise be silently unprotected.
+        # Only data files are checked; prose alongside them is not a result.
+        run: |
+          status=0
+          for dir in docs/baselines/*/ docs/experiments/*/; do
+            [ -f "$dir/SHA256SUMS.txt" ] || continue
+            listed=$(awk '{print $NF}' "$dir/SHA256SUMS.txt" | sed 's/^\*//')
+            for f in "$dir"*.json "$dir"*.jsonl; do
+              [ -e "$f" ] || continue
+              name=$(basename "$f")
+              echo "$listed" | grep -qx "$name" || { echo "::error::$dir$name has no checksum"; status=1; }
+            done
+          done
+          [ $status -eq 0 ] && echo "every result file is covered"
+          exit $status
+
+      - name: No credentials in the repository
+        run: |
+          if git grep -nEI "gsk_[A-Za-z0-9]{20}|hf_[A-Za-z0-9]{20}|sk-ant-[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}" -- . ; then
+            echo "::error::a credential-shaped string is committed"
+            exit 1
+          fi
+          echo "no credential-shaped strings found"
+
+      - name: No .env is tracked
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked by git"
+            exit 1
+          fi
+          echo ".env is not tracked"
+
+  # ---------------------------------------------------------------- the artifact
+  container:
+    name: Container boots and reports healthy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the deployable image
+        run: docker build -t rote:ci .
+
+      - name: Nothing secret is baked into the image
+        run: |
+          docker run --rm --entrypoint sh rote:ci -c '
+            test ! -f .env || { echo "ERROR: .env is in the image"; exit 1; }
+            test ! -d .git || { echo "ERROR: .git is in the image"; exit 1; }
+            id | grep -q "uid=1000" || { echo "ERROR: not running as uid 1000"; exit 1; }
+            echo "image is clean and runs unprivileged"
+          '
+
+      - name: Boot it
+        # no GROQ_API_KEY here, so it starts on the deterministic classifier. That is the
+        # configuration CI can verify without a credential.
+        run: |
+          docker run -d --name rote-ci -p 7860:7860 \
+            -e ROTE_CLASSIFIER=deterministic \
+            -e ROTE_VERIFY_EVIDENCE=1 \
+            rote:ci
+
+      - name: Wait for readiness
+        # the port opens immediately and reports ready:false while the plans compile, so this
+        # polls the honest readiness flag rather than merely waiting for a connection
+        run: |
+          for i in $(seq 1 120); do
+            body=$(curl -s -m 10 http://127.0.0.1:7860/health || true)
+            case "$body" in
+              *'"ready":true'*) echo "$body"; exit 0 ;;
+            esac
+            sleep 5
+          done
+          echo "::error::container never became ready"
+          docker logs rote-ci | tail -40
+          exit 1
+
+      - name: Check what it reports
+        run: |
+          body=$(curl -s -m 10 http://127.0.0.1:7860/health)
+          echo "$body"
+          python - "$body" <<'PY'
+          import json, sys
+          health = json.loads(sys.argv[1])
+          expected = {"ready": True, "ledger_valid": True, "research_grade": False,
+                      "verify_evidence": True, "backlog": 500}
+          bad = {k: (health.get(k), v) for k, v in expected.items() if health.get(k) != v}
+          if bad:
+              print(f"::error::health reported {bad}")
+              sys.exit(1)
+          leaks = [k for k in health if "key" in k.lower() or "token" in k.lower()]
+          if leaks:
+              print(f"::error::health exposes {leaks}")
+              sys.exit(1)
+          print("health is correct and exposes no credential")
+          PY
+
+      - name: Pages render and refusals cost nothing
+        run: |
+          set -e
+          for path in / /queue /ledger /exceptions /api/backlog; do
+            code=$(curl -s -o /tmp/body -w "%{http_code}" -m 20 "http://127.0.0.1:7860$path")
+            grep -q "Traceback" /tmp/body && { echo "::error::$path leaked a traceback"; exit 1; }
+            [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }
+            echo "  $path OK"
+          done
+          curl -s -m 60 -X POST http://127.0.0.1:7860/api/resolve \
+            -H 'content-type: application/json' -d '{"exception_id":"EXC-000000"}' > /tmp/amb
+          python - <<'PY'
+          import json
+          view = json.load(open("/tmp/amb"))
+          assert view["decision"] == "escalate", view["decision"]
+          assert view["plan_lookups"] == 0, view["plan_lookups"]
+          assert view["compiled_steps_executed"] == 0, view["compiled_steps_executed"]
+          print("ambiguous case refused with zero lookups and zero steps")
+          PY
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker logs rote-ci | tail -60
+
+      - name: Stop
+        if: always()
+        run: docker rm -f rote-ci || true
