@@ -82,7 +82,9 @@
       </tr>
       <tr><td>automated</td><td class="num">500</td><td class="num">184</td></tr>
       <tr><td>automation coverage</td><td class="num">100%</td><td class="num">36.8%</td></tr>
-      <tr><td>accuracy</td><td class="num">88.0%</td><td class="num">100%</td></tr>
+      <tr><td>precision of automated actions</td>
+        <td class="num">88.0% <span class="frac">440 / 500</span></td>
+        <td class="num">100% <span class="frac">184 / 184</span></td></tr>
       <tr class="headline">
         <td><strong>confidently wrong</strong></td>
         <td class="num"><strong>60</strong></td>
@@ -138,8 +140,9 @@
     <li><strong>Synthetic benchmark, not production evidence.</strong> The financial world and
       the fallback agent are deterministic stand-ins written for this project. The classifier is a
       real hosted model. No number here is evidence about real reconciliation rates.</li>
-    <li><strong>Rote is level with the agent on accuracy, never better</strong> &mdash; 500/500
-      each. It trades coverage for the removal of confident errors.</li>
+    <li><strong>Rote is not more accurate than the agent.</strong> It automates less, and every
+      case it refuses is still resolved by the agent. What changes is that no wrong action is
+      committed without a person seeing it.</li>
     <li><strong>Not production.</strong> No payment rail, no bank, no customer data, no real
       money. The only mutation boundary is an in-memory simulated world. The single external call
       is the classification request to the model.</li>

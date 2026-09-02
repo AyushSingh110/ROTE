@@ -47,8 +47,9 @@ ADVERSARIAL = (
 )
 # the frozen baselines, quoted from docs/baselines/ and never recomputed here
 BASELINES = {
+    # "correct" counts the automated actions only, never the cases handed to a human
     "v1": {"automated": 500, "refused": 0, "correct": 440, "wrong": 60, "coverage": "100%"},
-    "v2": {"automated": 184, "refused": 316, "correct": 500, "wrong": 0, "coverage": "36.8%"},
+    "v2": {"automated": 184, "refused": 316, "correct": 184, "wrong": 0, "coverage": "36.8%"},
 }
 
 _logger = get_logger("rote.web")

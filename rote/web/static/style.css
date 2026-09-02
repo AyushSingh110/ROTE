@@ -225,3 +225,6 @@ tr.check.unverifiable td { background: #fffaf0; }
 }
 .btn:hover { border-color: var(--ink); }
 .btn.restore { background: #16181d; color: #fff; border-color: #16181d; }
+
+/* the denominator beside a percentage, so the figure cannot be read as a global rate */
+.frac { display: block; font-size: 11px; color: var(--muted, #5b6472); font-weight: 400; }
